@@ -134,6 +134,9 @@ fi
 third_party_rows=""
 while IFS= read -r ref; do
   [[ -n "${ref}" ]] || continue
+  # The gateway may live under the release registry; it is checked below
+  # against agentgateway.env rather than as a release image.
+  [[ "${ref}" == "${gateway_ref}" ]] && continue
   if [[ "${ref}" == "${registry}/"* ]]; then
     name="${ref#"${registry}/"}"
     name="${name%%:*}"
@@ -147,7 +150,6 @@ while IFS= read -r ref; do
     echo "error: the charts render ${ref}, which is not pinned by digest" >&2
     exit 1
   fi
-  [[ "${ref}" == "${gateway_ref}" ]] && continue
   third_party_rows+="| \`${ref}\` |"$'\n'
 done <<<"${rendered}"
 read -r gateway_index gateway_platforms < <(inspect "${gateway_ref}" "${GATEWAY_REVISION}")
