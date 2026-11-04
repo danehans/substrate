@@ -14,7 +14,13 @@
 
 name: Build agentgateway image
 
+# In danehans/substrate, a push to a danehans/* branch that changes
+# hack/release/danehans/agentgateway.env also builds the source it names, so
+# the chart's default gateway is built from a reviewed, committed revision.
 on:
+  push:
+    branches: ['danehans/**']
+    paths: ['hack/release/danehans/agentgateway.env']
   workflow_dispatch:
     inputs:
       repository:
@@ -39,17 +45,55 @@ env:
 
 jobs:
   source:
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'danehans/substrate'
     runs-on: ubuntu-24.04
     outputs:
+      repository: ${{ steps.selected.outputs.repository }}
       sha: ${{ steps.source.outputs.sha }}
       short_sha: ${{ steps.source.outputs.short_sha }}
       tag: ${{ steps.source.outputs.tag }}
     steps:
+      - name: Checkout the selected source file
+        if: github.event_name == 'push'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: hack/release/danehans/agentgateway.env
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          path: selected
+
+      # A push builds the full revision agentgateway.env names; a manual run
+      # builds its inputs.
+      - name: Select source
+        id: selected
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_REPOSITORY: ${{ inputs.repository }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          if [[ "$EVENT" == push ]]; then
+            # shellcheck source=/dev/null
+            source selected/hack/release/danehans/agentgateway.env
+            if [[ ! "$GATEWAY_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ || ! "$GATEWAY_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::agentgateway.env must name owner/repository and a full commit SHA."
+              exit 1
+            fi
+            repository=$GATEWAY_REPOSITORY
+            ref=$GATEWAY_REVISION
+          else
+            repository=$INPUT_REPOSITORY
+            ref=$INPUT_REF
+          fi
+          {
+            echo "repository=$repository"
+            echo "ref=$ref"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Checkout agentgateway
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ inputs.repository }}
-          ref: ${{ inputs.ref }}
+          repository: ${{ steps.selected.outputs.repository }}
+          ref: ${{ steps.selected.outputs.ref }}
           persist-credentials: false
 
       - name: Resolve source revision and image tag
@@ -90,7 +134,7 @@ jobs:
       - name: Checkout agentgateway
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ inputs.repository }}
+          repository: ${{ needs.source.outputs.repository }}
           ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
 
@@ -118,7 +162,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.source.outputs.sha }}
-            org.opencontainers.image.url=https://github.com/${{ inputs.repository }}/commit/${{ needs.source.outputs.sha }}
+            org.opencontainers.image.url=https://github.com/${{ needs.source.outputs.repository }}/commit/${{ needs.source.outputs.sha }}
 
       - name: Export digest
         env:
@@ -164,7 +208,7 @@ jobs:
         working-directory: ${{ runner.temp }}/digests
         env:
           IMAGE_TAG: ${{ needs.source.outputs.tag }}
-          SOURCE_URL: https://github.com/${{ inputs.repository }}/commit/${{ needs.source.outputs.sha }}
+          SOURCE_URL: https://github.com/${{ needs.source.outputs.repository }}/commit/${{ needs.source.outputs.sha }}
         run: |
           images=()
           for digest in *; do
