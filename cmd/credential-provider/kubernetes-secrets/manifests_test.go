@@ -44,7 +44,7 @@ func TestProviderManifests(t *testing.T) {
 		{name: "kustomize", tool: "kubectl", namespace: "ate-system",
 			args: []string{"kustomize", "../../../manifests/egress-credential-injection"}},
 		{name: "CI images", tool: "helm", namespace: "ate-system",
-			image: "localhost:5001/kagent-dev/substrate/kubernetes-secrets:helm-e2e",
+			image: "localhost:5001/danehans/substrate/kubernetes-secrets:helm-e2e",
 			args:  []string{"template", "substrate", "../../../charts/substrate", "-n", "ate-system", "--set", "image.registry=localhost:5001", "--set", "image.tag=helm-e2e"}},
 		{name: "global images", tool: "helm", namespace: "ate-system",
 			image: "mirror.example/custom/substrate/kubernetes-secrets:test",

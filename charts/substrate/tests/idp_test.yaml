@@ -41,7 +41,7 @@ tests:
       value: custom-ate-idp-server
   - equal:
       path: spec.template.spec.containers[0].image
-      value: mirror.example/kagent-dev/substrate/ate-idp-server:test
+      value: mirror.example/danehans/substrate/ate-idp-server:test
   - equal:
       path: spec.template.spec.containers[0].resources.requests.memory
       value: 64Mi

@@ -27,7 +27,7 @@ helm upgrade --install substrate ./charts/substrate \
   --set postgres.ownerConnectionStringSecretRef.name=substrate-postgres-owner
 ```
 
-By default, component images are pulled from `ghcr.io/kagent-dev/substrate`
+By default, component images are pulled from `ghcr.io/danehans/substrate`
 using the chart `appVersion` as the tag. Override `image.registry` and
 `image.tag` to install from a different image repository or tag.
 
