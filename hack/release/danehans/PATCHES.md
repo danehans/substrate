@@ -28,7 +28,8 @@ base source unchanged.
    [`agentgateway.env`](agentgateway.env), built by this fork's
    `agentgateway-image` workflow and pinned by digest. The chart's
    `atenet-egress` gateway and `atenet-router` ingress router both use this
-   value, as they do in the base.
+   value, as they do in the base. The kustomize manifests under
+   `manifests/ate-install` keep the base gateway.
    - Upstream proposal:
      [agentgateway/agentgateway#4289](https://github.com/agentgateway/agentgateway/issues/4289)
      (expose the applied Substrate egress policy's UID and version to CEL and
