@@ -242,7 +242,7 @@ image:
   # Image path prefix under the registry, ahead of each component name. The path
   # is identical on every registry that serves the images. A mirror copies the
   # images under this same path.
-  repository: kagent-dev/substrate
+  repository: danehans/substrate
   tag: ""
 
 images:

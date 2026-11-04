@@ -56,7 +56,7 @@ func TestHelmControllerInstallation(t *testing.T) {
 		}
 		found = true
 		pod := resource.Spec.Template.Spec
-		if len(pod.Containers) != 1 || pod.Containers[0].Image != "mirror.example/kagent-dev/substrate/podcertcontroller:test" {
+		if len(pod.Containers) != 1 || pod.Containers[0].Image != "mirror.example/danehans/substrate/podcertcontroller:test" {
 			t.Fatalf("unexpected controller containers: %+v", pod.Containers)
 		}
 		if !slices.Contains(pod.Containers[0].Args, "--postgres-client-namespace=application-system") {

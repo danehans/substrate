@@ -44,7 +44,7 @@ Install substrate-atelet before substrate, and upgrade them in that order. The
 [version skew policy](../../docs/reference/version-skew-policy.md) upgrades
 atelet before ate-api-server.
 
-By default, component images are pulled from `ghcr.io/kagent-dev/substrate`
+By default, component images are pulled from `ghcr.io/danehans/substrate`
 using the chart `appVersion` as the tag. Override `image.registry` and
 `image.tag` to install from a different image repository or tag.
 

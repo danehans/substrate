@@ -109,5 +109,5 @@ image:
   # `registry` fails the render.
   registry: ghcr.io
   # Image path prefix under the registry, ahead of each component name.
-  repository: kagent-dev/substrate
+  repository: danehans/substrate
   tag: ""
