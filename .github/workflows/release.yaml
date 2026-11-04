@@ -19,7 +19,10 @@
 #
 # agent-substrate/substrate and kagent-dev/substrate publish images and binaries
 # under their own repository. kagent-dev/substrate also publishes Helm charts.
-# Other forks create a draft without publishing artifacts.
+# danehans/substrate publishes images, charts and binaries for
+# <base tag>-danehans.N tags only, and drafts its notes with
+# hack/release/danehans/draft-release.sh. Other forks create a draft without
+# publishing artifacts.
 #
 # Run manually to publish images or draft a release for an existing tag.
 # A complete image set is left unchanged unless overwrite is set; an incomplete
@@ -55,7 +58,7 @@ env:
   ATE_PUBLISH_SOURCE_URL: https://github.com/${{ github.repository }}
 jobs:
   images:
-    if: (github.repository == 'agent-substrate/substrate' || github.repository == 'kagent-dev/substrate') && !inputs.dry_run_images
+    if: (github.repository == 'agent-substrate/substrate' || github.repository == 'kagent-dev/substrate' || github.repository == 'danehans/substrate') && !inputs.dry_run_images
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -73,6 +76,13 @@ jobs:
       with:
         ref: refs/tags/${{ inputs.tag || github.ref_name }}
         persist-credentials: false
+    # danehans/substrate publishes nothing for a tag outside its scheme, such
+    # as an upstream tag pushed to the fork.
+    - name: Check the danehans/substrate tag
+      if: github.repository == 'danehans/substrate'
+      env:
+        TAG: ${{ inputs.tag || github.ref_name }}
+      run: hack/release/danehans/check-tag.sh "${TAG}"
     - name: Setup Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
@@ -150,7 +160,7 @@ jobs:
       run: go run ./cmd/ate-setup publish release-images
   charts:
     needs: images
-    if: github.repository == 'kagent-dev/substrate' && !inputs.dry_run_images
+    if: (github.repository == 'kagent-dev/substrate' || github.repository == 'danehans/substrate') && !inputs.dry_run_images
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -180,9 +190,11 @@ jobs:
           (needs.charts.result == 'success' || needs.charts.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Creating a release needs contents: write.
+    # Creating a release needs contents: write. danehans/substrate reads its
+    # published images and charts back to record their digests.
     permissions:
       contents: write
+      packages: read
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -203,18 +215,39 @@ jobs:
         cache: false
     # Build before creating the draft so a build failure leaves no draft.
     - name: Build kubectl-ate
-      if: github.repository == 'agent-substrate/substrate' || github.repository == 'kagent-dev/substrate'
+      if: github.repository == 'agent-substrate/substrate' || github.repository == 'kagent-dev/substrate' || github.repository == 'danehans/substrate'
       env:
         VERSION: ${{ inputs.tag || github.ref_name }}
       run: go run ./cmd/ate-setup publish release-binaries --out bin/release
     - name: Draft release
+      if: github.repository != 'danehans/substrate'
       env:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ inputs.tag || github.ref_name }}
       run: hack/release/draft-release.sh "${TAG}"
+    - name: Install Helm
+      if: github.repository == 'danehans/substrate'
+      uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+      with:
+        version: v3.18.4
+    - name: Log in to ghcr.io
+      if: github.repository == 'danehans/substrate'
+      env:
+        TOKEN: ${{ github.token }}
+      run: |
+        .github/scripts/release/ghcr-login.sh
+        helm registry login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin <<<"${TOKEN}"
+    # Records the source and base revisions, the patch list and every
+    # published digest, read back from the registry, in the draft's notes.
+    - name: Draft danehans/substrate release
+      if: github.repository == 'danehans/substrate'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ inputs.tag || github.ref_name }}
+      run: hack/release/danehans/draft-release.sh "${TAG}" bin/release
     # Assets are replaced only while the release is a draft.
     - name: Attach kubectl-ate
-      if: github.repository == 'agent-substrate/substrate' || github.repository == 'kagent-dev/substrate'
+      if: github.repository == 'agent-substrate/substrate' || github.repository == 'kagent-dev/substrate' || github.repository == 'danehans/substrate'
       env:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ inputs.tag || github.ref_name }}
