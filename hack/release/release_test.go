@@ -148,3 +148,27 @@ func TestDraftReleaseArtifactNotes(t *testing.T) {
 		})
 	}
 }
+
+func TestDanehansCheckTag(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for tag, ok := range map[string]bool{
+		"v1.0.0-rc1-danehans.0":        true,
+		"v1.0.0-rc1-danehans.12":       true,
+		"v1.0.0-rc1":                   false,
+		"v1.0.0":                       false,
+		"v1.0.0-rc1-danehans.01":       false,
+		"v1.0.0-rc1-danehans.":         false,
+		"v1.0.0-rc1-danehans.0x":       false,
+		"v1.0.0Xrc1-danehans.0":        false,
+		"v1.0.0-rc2-danehans.0":        false,
+		"v1.0.0-rc1-danehans.0,latest": false,
+	} {
+		out, err := exec.Command("bash", filepath.Join(root, "hack/release/danehans/check-tag.sh"), tag).CombinedOutput()
+		if (err == nil) != ok {
+			t.Errorf("check-tag %q: err=%v, want ok=%v\n%s", tag, err, ok, out)
+		}
+	}
+}

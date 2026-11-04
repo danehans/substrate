@@ -119,3 +119,31 @@ component images. All charts are packaged before any chart is pushed. A failed
 push may leave a partial set; rerun the workflow while the release is a draft.
 The chart publisher refuses writes once the release is published, including
 when `overwrite` is set for images.
+
+## danehans/substrate releases
+
+`danehans/substrate` is an experimental, unqualified downstream. Its releases
+come from `danehans/<base tag>` branches; [`fork.env`](../../hack/release/danehans/fork.env)
+records the base, and [`PATCHES.md`](../../hack/release/danehans/PATCHES.md)
+lists every change with its upstream proposal and replacement condition.
+
+- Tags are `<base tag>-danehans.N`, for example `v1.0.0-rc1-danehans.0`.
+  [`check-tag.sh`](../../hack/release/danehans/check-tag.sh) refuses any other
+  tag before the `images` job publishes anything.
+- The workflow publishes images for `linux/amd64` and `linux/arm64`, the three
+  charts and `kubectl-ate` under `ghcr.io/danehans/substrate`. The charts default
+  `image.repository` to `danehans/substrate`.
+- The `draft` job runs [`hack/release/danehans/draft-release.sh`](../../hack/release/danehans/draft-release.sh)
+  instead of the upstream notes script. It reads every image and chart back from
+  the registry, checks that each release image carries both platforms and the
+  tag's revision label, and records the source and base revisions, the patch
+  list, and every digest and `kubectl-ate` checksum in the draft. It refreshes a
+  draft's notes on a rerun and never changes a published release.
+- The chart's default gateway is built from the revision in
+  [`agentgateway.env`](../../hack/release/danehans/agentgateway.env): a push
+  that changes that file on a `danehans/*` branch runs `agentgateway-image`,
+  and a separate commit moves `images.agentgateway` to the resulting index
+  digest before the release is tagged.
+
+After the first release that adds a package, make it public in its package
+settings, as for any GitHub package.
