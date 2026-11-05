@@ -119,6 +119,26 @@ const (
 	HoldActionReleased = "released"
 )
 
+// Keys of the ate.actor.quarantine_changed event. Logs only, like the hold
+// keys.
+const (
+	ActorQuarantineActionKey           = attribute.Key("ate.actor.quarantine.action")
+	ActorQuarantineCallerKey           = attribute.Key("ate.actor.quarantine.caller")
+	ActorQuarantineReasonKey           = attribute.Key("ate.actor.quarantine.reason")
+	ActorQuarantineIncidentIDKey       = attribute.Key("ate.actor.quarantine.incident_id")
+	ActorQuarantineRequestIDKey        = attribute.Key("ate.actor.quarantine.request_id")
+	ActorQuarantineReleaseRequestIDKey = attribute.Key("ate.actor.quarantine.release_request_id")
+	ActorQuarantineStepsKey            = attribute.Key("ate.actor.quarantine.steps")
+)
+
+// Values for ActorQuarantineActionKey.
+const (
+	QuarantineActionQuarantined   = "quarantined"
+	QuarantineActionSuspended     = "suspended"
+	QuarantineActionReleased      = "released"
+	QuarantineActionResumeRefused = "resume_refused"
+)
+
 // Values for ActorStateKey, mirroring ateapi.ActorState with the
 // ACTOR_STATE_ prefix dropped so the two cannot fork. ActorStateDeleted is the
 // exception and has no enum counterpart: the record is gone, so no stored state

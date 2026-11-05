@@ -28,8 +28,8 @@ import (
 const maxMembersPerPolicy = 1500
 
 var (
-	validGlobalRoles   = []string{authz.RoleOwner, authz.RoleViewer, authz.RoleHoldManager}
-	validAtespaceRoles = []string{authz.RoleOwner, authz.RoleEditor, authz.RoleViewer, authz.RoleHoldManager}
+	validGlobalRoles   = []string{authz.RoleOwner, authz.RoleViewer, authz.RoleHoldManager, authz.RoleQuarantineManager, authz.RoleQuarantineAdmin}
+	validAtespaceRoles = []string{authz.RoleOwner, authz.RoleEditor, authz.RoleViewer, authz.RoleHoldManager, authz.RoleQuarantineManager, authz.RoleQuarantineAdmin}
 
 	bindingsPath = field.NewPath("access_policy", "bindings")
 )

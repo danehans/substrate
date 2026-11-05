@@ -232,6 +232,70 @@ groups:
         brief: The request_id of the ReleaseActorHold call.
         examples: [incident-1042/release]
 
+  - id: registry.ate.actor.quarantine
+    type: attribute_group
+    brief: >
+      An actor quarantine, from QuarantineActor or ReleaseQuarantine. Logs
+      only, by the cardinality rule no-actor-identity in
+      docs/metrics/substrate.yaml: every value but the action and the steps
+      comes from a request or its caller.
+    attributes:
+      - id: ate.actor.quarantine.action
+        stability: development
+        brief: What happened to the quarantine.
+        type:
+          members:
+            - id: quarantined
+              stability: development
+              value: quarantined
+              brief: QuarantineActor placed the quarantine.
+            - id: suspended
+              stability: development
+              value: suspended
+              brief: QuarantineActor suspended the activation it quarantined.
+            - id: released
+              stability: development
+              value: released
+              brief: ReleaseQuarantine released the quarantine.
+            - id: resume_refused
+              stability: development
+              value: resume_refused
+              brief: The quarantine refused a resume.
+      - id: ate.actor.quarantine.caller
+        stability: development
+        type: string
+        brief: The authenticated principal that made the call.
+        examples: ["user:spiffe://cluster.local/ns/sec/sa/detector"]
+      - id: ate.actor.quarantine.reason
+        stability: development
+        type: string
+        brief: >
+          The reason of the QuarantineActor or ReleaseQuarantine call; for a
+          refused resume, the quarantine's.
+        examples: [exfiltration attempt blocked by egress policy]
+      - id: ate.actor.quarantine.incident_id
+        stability: development
+        type: string
+        brief: The incident QuarantineActor named, if any.
+        examples: [INC-1042]
+      - id: ate.actor.quarantine.request_id
+        stability: development
+        type: string
+        brief: The request_id of the QuarantineActor call, which names the quarantine.
+        examples: [incident-1042/quarantine]
+      - id: ate.actor.quarantine.release_request_id
+        stability: development
+        type: string
+        brief: The request_id of the ReleaseQuarantine call.
+        examples: [incident-1042/release]
+      - id: ate.actor.quarantine.steps
+        stability: development
+        type: string
+        brief: >
+          The QuarantineStep values in effect, lower case without the
+          QUARANTINE_STEP_ prefix, joined by commas.
+        examples: ["hold,marked,suspended"]
+
   - id: registry.ate.template
     type: attribute_group
     brief: >
