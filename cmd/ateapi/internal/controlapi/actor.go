@@ -649,6 +649,10 @@ func (s *ServiceImpl) PlaceActorHold(ctx context.Context, actorRef resources.Act
 	return s.store.PlaceActorHold(ctx, actorRef, check, receipt)
 }
 
+func (s *ServiceImpl) ReplaceActorHoldReceipt(ctx context.Context, actorRef resources.ActorRef, r *ateapi.LifecycleReceipt) error {
+	return s.store.ReplaceActorHoldReceipt(ctx, actorRef, r)
+}
+
 func (s *ServiceImpl) ReleaseActorHold(ctx context.Context, actorRef resources.ActorRef, holder, holdRequestID string, check func(*ateapi.Actor) error, receipt func(stored *ateapi.Actor, released *ateapi.ActorHold) *ateapi.LifecycleReceipt) (*ateapi.Actor, *ateapi.LifecycleReceipt, error) {
 	return s.store.ReleaseActorHold(ctx, actorRef, holder, holdRequestID, check, receipt)
 }

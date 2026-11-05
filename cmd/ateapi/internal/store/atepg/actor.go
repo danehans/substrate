@@ -36,9 +36,10 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapi.Actor) (*at
 	// fix it later.
 	dbActor := proto.Clone(actor).(*ateapi.Actor)
 	setCreateMetadata(dbActor.Metadata)
-	// A new Actor has no holds, even if it replaces a held one.
+	// A new Actor has no holds or quarantine, even if it replaces a held one.
 	if dbActor.Status != nil {
 		dbActor.Status.Holds = nil
+		dbActor.Status.Quarantine = nil
 	}
 	if err := validateSnapshotURIs("actor "+resources.ActorRefFromActor(dbActor).String(), dbActor.GetStatus().GetSnapshots()...); err != nil {
 		return nil, err
@@ -136,23 +137,25 @@ func getActorRow(ctx context.Context, q querier, actorRef resources.ActorRef, fo
 
 // writeActorRow applies mutate to dbActor, as getActorRow read it, and writes
 // it back only if the stored row is still at the version read. mutate cannot
-// change status.holds: only the hold writes in actor_hold.go set it, before
-// they call writeActorRow.
+// change status.holds or status.quarantine: only the hold writes in
+// actor_hold.go set them, before they call writeActorRow.
 func writeActorRow(ctx context.Context, q querier, actorRef resources.ActorRef, dbActor *ateapi.Actor, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
 	currentUID, currentVersion := dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion()
 	oldMeta := proto.CloneOf(dbActor.Metadata)
 	holds := cloneHolds(dbActor.GetStatus().GetHolds())
+	quarantine := proto.CloneOf(dbActor.GetStatus().GetQuarantine())
 	if mutate != nil {
 		if err := mutate(dbActor); err != nil {
 			return nil, err
 		}
 	}
-	if len(holds) > 0 && dbActor.Status == nil {
+	if (len(holds) > 0 || quarantine != nil) && dbActor.Status == nil {
 		dbActor.Status = &ateapi.ActorStatus{}
 	}
 	if dbActor.Status != nil {
 		dbActor.Status.Holds = holds
+		dbActor.Status.Quarantine = quarantine
 	}
 	if err := validateSnapshotURIs("actor "+actorRef.String(), dbActor.GetStatus().GetSnapshots()...); err != nil {
 		return nil, err

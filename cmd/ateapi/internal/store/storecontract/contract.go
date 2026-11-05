@@ -785,6 +785,88 @@ func runActorHoldContractTests(t *testing.T, setup func(t *testing.T) store.Inte
 			t.Errorf("stored actor holds = %v, want none", got)
 		}
 	})
+
+	quarantineReceipt := func(requestID string) func(*ateapi.Actor) *ateapi.LifecycleReceipt {
+		return func(stored *ateapi.Actor) *ateapi.LifecycleReceipt {
+			r := holdReceipt(store.QuarantineHolder, requestID)(stored)
+			r.Operation = ateapi.LifecycleOperation_LIFECYCLE_OPERATION_QUARANTINE
+			r.Quarantine = &ateapi.ActorQuarantine{RequestId: requestID, Caller: holderA, Reason: "incident"}
+			return r
+		}
+	}
+
+	t.Run("QuarantineHoldSetsStatus", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		_, actorRef := createActor(t, s)
+		held, r, err := s.PlaceActorHold(ctx, actorRef, allow, quarantineReceipt("q-1"))
+		if err != nil {
+			t.Fatalf("PlaceActorHold failed: %v", err)
+		}
+		q := held.GetStatus().GetQuarantine()
+		if q.GetRequestId() != "q-1" || q.GetCaller() != holderA || q.GetCreateTime() == nil {
+			t.Errorf("status.quarantine = %v, want the receipt's quarantine with a create time", q)
+		}
+		// Other writes keep it, as they keep holds.
+		updated, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(held), func(a *ateapi.Actor) error {
+			a.Status = &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateActor failed: %v", err)
+		}
+		if !proto.Equal(updated.GetStatus().GetQuarantine(), q) {
+			t.Errorf("status.quarantine after UpdateActor = %v, want %v", updated.GetStatus().GetQuarantine(), q)
+		}
+
+		// A replaced receipt reaches both the hold row and the receipt, and
+		// releasing the hold keeps the replacement.
+		final := proto.CloneOf(r)
+		final.Steps = []ateapi.QuarantineStep{ateapi.QuarantineStep_QUARANTINE_STEP_HOLD, ateapi.QuarantineStep_QUARANTINE_STEP_SUSPENDED}
+		if err := s.ReplaceActorHoldReceipt(ctx, actorRef, final); err != nil {
+			t.Fatalf("ReplaceActorHoldReceipt failed: %v", err)
+		}
+		for _, get := range []func() (*ateapi.LifecycleReceipt, error){
+			func() (*ateapi.LifecycleReceipt, error) { return s.GetActorHold(ctx, actorRef, store.QuarantineHolder) },
+			func() (*ateapi.LifecycleReceipt, error) { return s.GetActorLifecycleReceipt(ctx, actorRef, "q-1") },
+		} {
+			if got, err := get(); err != nil {
+				t.Errorf("reading the quarantine receipt failed: %v", err)
+			} else if diff := cmp.Diff(final, got, protocmp.Transform()); diff != "" {
+				t.Errorf("stored quarantine receipt (-want +got):\n%s", diff)
+			}
+		}
+
+		released, _, err := s.ReleaseActorHold(ctx, actorRef, store.QuarantineHolder, "q-1", allow, releaseReceipt(store.QuarantineHolder, "release-q", "q-1"))
+		if err != nil {
+			t.Fatalf("ReleaseActorHold failed: %v", err)
+		}
+		if got := released.GetStatus().GetQuarantine(); got != nil {
+			t.Errorf("status.quarantine after release = %v, want none", got)
+		}
+		if got := mustGet(t, s, actorRef).GetStatus(); got.GetQuarantine() != nil || len(got.GetHolds()) != 0 {
+			t.Errorf("stored status after release = %v, want no quarantine or holds", got)
+		}
+		if got, err := s.GetActorLifecycleReceipt(ctx, actorRef, "q-1"); err != nil {
+			t.Errorf("quarantine receipt after release: %v", err)
+		} else if diff := cmp.Diff(final, got, protocmp.Transform()); diff != "" {
+			t.Errorf("kept quarantine receipt (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("ReplacementIsNotQuarantined", func(t *testing.T) {
+		s := setup(t)
+		mustCreateAtespace(t, s, testAtespace)
+		in := newTestSuspendedActor(testAtespace, "session-1")
+		in.Status.Quarantine = &ateapi.ActorQuarantine{RequestId: "forged"}
+		created, err := s.CreateActor(context.Background(), in)
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		if got := mustGet(t, s, resources.ActorRefFromActor(created)).GetStatus().GetQuarantine(); got != nil {
+			t.Errorf("stored actor quarantine = %v, want none", got)
+		}
+	})
 }
 
 func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
