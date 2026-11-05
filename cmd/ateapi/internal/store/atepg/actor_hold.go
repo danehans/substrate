@@ -85,6 +85,13 @@ func (p *Persistence) PlaceActorHold(ctx context.Context, actorRef resources.Act
 		stored.Status = &ateapi.ActorStatus{}
 	}
 	stored.Status.Holds = append(stored.Status.Holds, proto.CloneOf(r.GetHold()))
+	if r.GetHold().GetHolder() == store.QuarantineHolder {
+		if r.GetQuarantine().GetRequestId() != r.GetRequestId() {
+			return nil, nil, fmt.Errorf("quarantine receipt for actor %s names another request", actorRef)
+		}
+		stored.Status.Quarantine = proto.CloneOf(r.GetQuarantine())
+		stored.Status.Quarantine.CreateTime = timestamppb.New(now)
+	}
 	if stored, err = writeActorRow(ctx, tx, actorRef, stored, nil, false); err != nil {
 		return nil, nil, err
 	}
@@ -132,6 +139,9 @@ func (p *Persistence) ReleaseActorHold(ctx context.Context, actorRef resources.A
 		stored.Status.Holds = slices.DeleteFunc(stored.Status.Holds, func(h *ateapi.ActorHold) bool {
 			return h.GetHolder() == holder && h.GetRequestId() == holdRequestID
 		})
+		if holder == store.QuarantineHolder {
+			stored.Status.Quarantine = nil
+		}
 		if stored, err = writeActorRow(ctx, tx, actorRef, stored, nil, false); err != nil {
 			return nil, nil, err
 		}
@@ -152,6 +162,32 @@ func (p *Persistence) ReleaseActorHold(ctx context.Context, actorRef resources.A
 		return nil, nil, fmt.Errorf("committing transaction: %w", err)
 	}
 	return stored, r, nil
+}
+
+func (p *Persistence) ReplaceActorHoldReceipt(ctx context.Context, actorRef resources.ActorRef, r *ateapi.LifecycleReceipt) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	b, err := proto.Marshal(r)
+	if err != nil {
+		return fmt.Errorf("marshaling hold receipt: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE actor_holds SET receipt = $5
+		WHERE atespace = $1 AND actor_name = $2 AND holder = $3 AND request_id = $4`,
+		actorRef.Atespace, actorRef.Name, r.GetHold().GetHolder(), r.GetRequestId(), b); err != nil {
+		return fmt.Errorf("replacing receipt of hold %q on actor %s: %w", r.GetRequestId(), actorRef, err)
+	}
+	if err := keepHoldReceipt(ctx, tx, actorRef, r, time.Now()); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing transaction: %w", err)
+	}
+	return nil
 }
 
 // keepHoldReceipt stores the receipt of a released hold under its request_id,

@@ -71,6 +71,11 @@ var (
 )
 
 // Interface defines the contract for the persistence layer storing actor state.
+// QuarantineHolder is the holder of the hold QuarantineActor places. Every
+// other holder is "user:" and a principal ID, so no caller of HoldActor or
+// ReleaseActorHold can name it.
+const QuarantineHolder = "quarantine"
+
 type Interface interface {
 	// Stores a new actor in suspended state and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
@@ -130,11 +135,13 @@ type Interface interface {
 
 	// PlaceActorHold stores the hold that receipt(stored).hold records, in
 	// one transaction with the write that appends it to status.holds and the
-	// receipt, created as UpdateActorWithReceipt creates one. check runs on
-	// the locked Actor first, and its error is returned as it is. Returns
-	// ErrNotFound if the Actor is missing, and ErrAlreadyExists if the holder
-	// already has a hold on it, another hold has the same request_id, or the
-	// request already has a receipt.
+	// receipt, created as UpdateActorWithReceipt creates one. A hold whose
+	// holder is QuarantineHolder also sets status.quarantine to the
+	// receipt's quarantine in the same write. check runs on the locked Actor
+	// first, and its error is returned as it is. Returns ErrNotFound if the
+	// Actor is missing, and ErrAlreadyExists if the holder already has a hold
+	// on it, another hold has the same request_id, or the request already has
+	// a receipt.
 	PlaceActorHold(ctx context.Context, actorRef resources.ActorRef, check func(*ateapi.Actor) error, receipt func(stored *ateapi.Actor) *ateapi.LifecycleReceipt) (*ateapi.Actor, *ateapi.LifecycleReceipt, error)
 
 	// ReleaseActorHold deletes holder's hold on the Actor if its request_id
@@ -142,8 +149,16 @@ type Interface interface {
 	// receipt, all in one transaction. receipt gets the released hold, or nil
 	// if there was none; the receipt is stored either way. The released
 	// hold's own receipt is kept LifecycleReceiptRetention from the release.
+	// Releasing the QuarantineHolder hold also clears status.quarantine.
 	// check is as for PlaceActorHold.
 	ReleaseActorHold(ctx context.Context, actorRef resources.ActorRef, holder, holdRequestID string, check func(*ateapi.Actor) error, receipt func(stored *ateapi.Actor, released *ateapi.ActorHold) *ateapi.LifecycleReceipt) (*ateapi.Actor, *ateapi.LifecycleReceipt, error)
+
+	// ReplaceActorHoldReceipt replaces the receipt of the hold that r.hold
+	// names, in its actor_holds row if the hold still exists, and the
+	// receipt stored under r.request_id, in one transaction. The stored
+	// receipt is kept LifecycleReceiptRetention from now. r keeps the
+	// create_time and expire_time it carries.
+	ReplaceActorHoldReceipt(ctx context.Context, actorRef resources.ActorRef, r *ateapi.LifecycleReceipt) error
 
 	// MarkActorForDeletion initiates the deletion of an actor. It sets
 	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
