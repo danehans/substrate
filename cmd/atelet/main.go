@@ -962,6 +962,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 		ActorDirs:             ateletpath.ActorDirs(actorUID),
 		EgressGateway:         toWorkerEgressGateway(req.GetEgressGateway()),
 		Resources:             toAteworkerResources(req.GetResources()),
+		ActivationId:          req.GetActivationId(),
 	})
 	if err != nil {
 		return nil, workerCallError("RunWorkload", err)
@@ -1907,6 +1908,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		PreserveRestoreDir:    directLocal,
 		EgressGateway:         toWorkerEgressGateway(req.GetEgressGateway()),
 		Resources:             toAteworkerResources(req.GetResources()),
+		ActivationId:          req.GetActivationId(),
 	})
 	dWorker = time.Since(tWorker)
 	if err != nil {

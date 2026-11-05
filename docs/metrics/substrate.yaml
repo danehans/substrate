@@ -149,6 +149,7 @@ cardinality_rules:
       - ate.actor.version
       - ate.actor.container.name
       - ate.actor.epoch
+      - ate.actor.activation
   - id: bounded-or-catalog-scoped
     brief: >
       Each ate.* metric label has a list of permitted values, or it names an

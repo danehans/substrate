@@ -8,8 +8,29 @@ names its upstream proposal and the condition that retires it.
 
 ## Functional patches
 
-None. Substrate's API, controllers, node agent and workers are built from the
-base source unchanged.
+1. **Activation ID.** Each resume that writes RESUMING mints a ULID in that
+   write, `ActorStatus.activation_id`. It is set and cleared in the same
+   writes as `worker_assignment`, so a resume that stops between the worker
+   claim and that write leaves none, and the next resume mints a fresh one. A
+   resume that finds the Actor already RESUMING replaces the ID before it
+   restores again, in one extra write on that path only. RUNNING is committed
+   only if the Actor still holds the ID that Run or Restore was sent with. The
+   ID rides Run and Restore to atelet and the worker, is recorded on
+   `ActorCrash.activation_id`, and is the `ate.actor.activation` attribute on
+   ateapi spans, lifecycle events and worker logs. The invariant holds only
+   when every ateapi replica runs this patch: the store drops unknown fields,
+   so a write by a base replica strips the ID from an assigned Actor. The
+   next resume of that Actor refuses RUNNING and replaces the ID.
+   - Upstream proposal:
+     [agent-substrate/substrate#1041](https://github.com/agent-substrate/substrate/issues/1041).
+     Upstream main writes RESUMING with the `BindActorToWorker` claim in one
+     transaction (agent-substrate/substrate#3223), so the rebased patch mints
+     in that write, and a resume can no longer stop between claim and
+     RESUMING.
+   - Replacement condition: a `kagent-dev/substrate` release carries an
+     activation ID with these semantics, and Picket's `substrate` runtime pins
+     and qualifies it
+     ([solo-io/picket#15](https://github.com/solo-io/picket/issues/15)).
 
 ## Packaging changes
 

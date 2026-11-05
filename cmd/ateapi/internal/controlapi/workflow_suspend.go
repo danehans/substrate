@@ -416,7 +416,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 			toUpdate.Status.AssignedNode = ""
 		}
 		pruneSnapshots(toUpdate.Status, snap)
-		toUpdate.Status.WorkerAssignment = nil
+		clearWorkerAssignment(toUpdate.Status)
 		return nil
 	})
 	dUpdateActor = time.Since(t)

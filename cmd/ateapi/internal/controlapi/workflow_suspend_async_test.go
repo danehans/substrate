@@ -121,7 +121,7 @@ func TestSuspendActorAsync_Finalized_AlreadyCrashed(t *testing.T) {
 			},
 		},
 	})
-	originalCrash := newActorCrash(ateattr.OperationSuspend, "original crash reason")
+	originalCrash := newActorCrash(ateattr.OperationSuspend, "original crash reason", "")
 	updateDuringCheckpoint(t, atelet, st, actorRef, func(s *ateapi.ActorStatus) {
 		s.State = ateapi.ActorState_ACTOR_STATE_CRASHED
 		s.Crash = originalCrash

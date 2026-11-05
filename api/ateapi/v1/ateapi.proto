@@ -943,6 +943,17 @@ message ActorStatus {
   // +k8s:minimum=0
   // +k8s:update=NoUnset
   int32 last_assigned_generation = 7;
+
+  // activation_id names the Actor's current activation: one Run or Restore on
+  // its assigned worker, up to the write that clears worker_assignment. It is
+  // a ULID, set and cleared in the same writes as worker_assignment. Each
+  // resume that writes RESUMING mints a new one, and a resume that finds the
+  // Actor already RESUMING replaces it before restoring again, so an ID is
+  // never sent on two Run or Restore calls.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string activation_id = 8;
 }
 
 // ActorCrash describes the failure that moved an Actor to CRASHED.
@@ -957,6 +968,13 @@ message ActorCrash {
   //
   // +k8s:optional
   google.protobuf.Timestamp crash_time = 2;
+
+  // activation_id is the ActorStatus.activation_id the Actor held when it
+  // crashed. Empty if it crashed with no activation.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string activation_id = 3;
 }
 
 // WorkerAssignment points at the Worker currently hosting an Actor.

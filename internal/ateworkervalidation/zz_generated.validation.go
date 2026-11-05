@@ -1652,6 +1652,37 @@ func Validate_RestoreWorkloadRequest(
 		errs = append(errs, fn(fldPath.Child("preserve_restore_dir"), &obj.PreserveRestoreDir, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateworkerpb.RestoreWorkloadRequest.ActivationId
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 26); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateworkerpb.RestoreWorkloadRequest) *string {
+				return &oldObj.ActivationId
+			})
+		errs = append(errs, fn(fldPath.Child("activation_id"), &obj.ActivationId, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -2036,6 +2067,37 @@ func Validate_RunWorkloadRequest(
 				return oldObj.ActorDirs
 			})
 		errs = append(errs, fn(fldPath.Child("actor_dirs"), obj.ActorDirs, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateworkerpb.RunWorkloadRequest.ActivationId
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 26); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateworkerpb.RunWorkloadRequest) *string {
+				return &oldObj.ActivationId
+			})
+		errs = append(errs, fn(fldPath.Child("activation_id"), &obj.ActivationId, oldVal, oldObj != nil)...)
 	}
 
 	return errs

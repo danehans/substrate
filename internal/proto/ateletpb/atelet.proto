@@ -600,6 +600,14 @@ message RunRequest {
   //
   // +k8s:required
   ActorSandboxRuntime sandbox_runtime = 12;
+
+  // The activation this request starts, from ActorStatus.activation_id. atelet
+  // passes it to the worker for attribution. Empty from a control plane that
+  // records no activation.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string activation_id = 13;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -1222,6 +1230,14 @@ message RestoreRequest {
   //
   // +k8s:required
   ActorSandboxRuntime sandbox_runtime = 12;
+
+  // The activation this request starts, from ActorStatus.activation_id. atelet
+  // passes it to the worker for attribution. Empty from a control plane that
+  // records no activation.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string activation_id = 13;
 }
 
 message RestoreResponse {
