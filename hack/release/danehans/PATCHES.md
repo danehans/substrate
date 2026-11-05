@@ -31,6 +31,24 @@ names its upstream proposal and the condition that retires it.
      activation ID with these semantics, and Picket's `substrate` runtime pins
      and qualifies it
      ([solo-io/picket#15](https://github.com/solo-io/picket/issues/15)).
+2. **Certificate binding.** Worker-for-actor certificates are bound to one
+   activation. atunnel keeps the activation it was given on Run or Restore
+   and sends it as `activation_id` on `MintActorCertificate` with the first
+   mint and every renewal; atelet forwards it on
+   `MintWorkerActorCertificate`. ateapi refuses the mint with `ABORTED`
+   unless it equals the Actor's current `activation_id` (an empty ID matches
+   only an Actor with none), which also ends atunnel's renewal loop. The
+   issued certificate's `ActorIdentity` extension carries it as
+   `ActivationId`, omitted when empty. Gateways that identify the actor from
+   the URI SAN (atenet egress, and agentgateway at both the base pin and the
+   `images.agentgateway` revision) are unaffected.
+   - Upstream proposal:
+     [agent-substrate/substrate#1041](https://github.com/agent-substrate/substrate/issues/1041)
+     (the certificate half of the authenticated per-run identity).
+   - Replacement condition: a `kagent-dev/substrate` release issues
+     activation-bound worker-for-actor certificates with these semantics, and
+     Picket's `substrate` runtime pins and qualifies it
+     ([solo-io/picket#15](https://github.com/solo-io/picket/issues/15)).
 
 ## Packaging changes
 

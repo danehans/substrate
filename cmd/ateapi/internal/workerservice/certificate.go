@@ -78,6 +78,19 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapi.Min
 	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
 		return nil, apierror.Aborted("conflict; actor has been deleted and recreated")
 	}
+	// The certificate names one activation: the one this worker was given on
+	// Run or Restore. Once the Actor holds another (a later resume, or a
+	// re-entry that replaced it), the worker's renewals are refused rather
+	// than reissued under the newer one. Aborted ends atunnel's renewal loop;
+	// NotFound would retry. An empty ID matches only an Actor with none.
+	if current := dbActor.GetStatus().GetActivationId(); current != req.GetActivationId() {
+		slog.WarnContext(ctx, "Refusing a worker-for-actor certificate for an activation the actor no longer holds",
+			slog.String("actor", resources.ActorRefFromActor(dbActor).String()),
+			slog.String("current_activation", current),
+			slog.String("requested_activation", req.GetActivationId()),
+			slog.String("caller_worker", req.GetWorker().GetName()))
+		return nil, apierror.Aborted("conflict; actor activation has changed")
+	}
 
 	// Parse the CSR.
 	csr, err := x509.ParseCertificateRequest(req.GetCertificateSigningRequest())
@@ -110,6 +123,8 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapi.Min
 			Atespace:  dbActor.GetMetadata().GetAtespace(),
 			ActorName: dbActor.GetMetadata().GetName(),
 			ActorUid:  dbActor.GetMetadata().GetUid(),
+			// Equal to the request's, checked above.
+			ActivationId: dbActor.GetStatus().GetActivationId(),
 		},
 		template,
 	)

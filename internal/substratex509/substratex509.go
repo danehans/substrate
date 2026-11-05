@@ -140,7 +140,14 @@ type ActorIdentity struct {
 	Atespace  string
 	ActorName string
 	ActorUid  string
+	// ActivationId is the ActorStatus.activation_id the certificate was minted
+	// for. It is omitted when the Actor had no activation, so such a
+	// certificate encodes exactly as one minted before the field existed.
+	ActivationId string `json:",omitempty"`
 }
+
+// maxActivationIDLength bounds ActivationId. An activation ID is a ULID.
+const maxActivationIDLength = 26
 
 func AddActorIdentityToCertificate(actor *ActorIdentity, template *x509.Certificate) error {
 	if err := validateActorIdentity(actor); err != nil {
@@ -202,6 +209,9 @@ func validateActorIdentity(actor *ActorIdentity) error {
 	}
 	if len(empty) > 0 {
 		return fmt.Errorf("empty fields: %s", strings.Join(empty, ", "))
+	}
+	if len(actor.ActivationId) > maxActivationIDLength {
+		return fmt.Errorf("ActivationId is longer than %d bytes", maxActivationIDLength)
 	}
 	return nil
 }
