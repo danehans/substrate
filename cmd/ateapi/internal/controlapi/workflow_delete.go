@@ -31,8 +31,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// DeleteActor executes the workflow to delete an actor. Idempotent.
-func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.Actor, error) {
+// DeleteActor executes the workflow to delete an actor. Idempotent. A
+// non-empty expectedActivation deletes the actor only while it holds that
+// activation; see ensureMarkedDeleting.
+func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, expectedActivation string) (*ateapi.Actor, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	ctx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
@@ -40,7 +42,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	}
 	defer lease.Close()
 
-	actor, err := w.ensureMarkedDeleting(ctx, actorRef, precondition)
+	actor, err := w.ensureMarkedDeleting(ctx, actorRef, precondition, expectedActivation)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +322,7 @@ var errAlreadyMarked = errors.New("already marked for deletion")
 // ensureMarkedDeleting sets the actor's delete_time, checking precondition,
 // and moves it to DELETING, returning the stored copy. Skips when a previous
 // attempt already marked the actor.
-func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (updated *ateapi.Actor, err error) {
+func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, expectedActivation string) (updated *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "MarkDeleting")
 	defer func() { err = done(err) }()
 
@@ -329,6 +331,11 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		if toUpdate.GetMetadata().GetDeleteTime() != nil {
 			alreadyDeleting = toUpdate
 			return errAlreadyMarked
+		}
+		// The activation is checked only when the delete starts: a retried
+		// delete finds the activation cleared once the worker is released.
+		if got := toUpdate.GetStatus().GetActivationId(); expectedActivation != "" && got != expectedActivation {
+			return apierror.FailedPrecondition("Actor %s holds activation %q, not the expected %q", actorRef, got, expectedActivation)
 		}
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_DELETING
 		return nil

@@ -77,7 +77,7 @@ func TestSuspendActor_CheckpointError(t *testing.T) {
 					}
 					return tt.err
 				}
-				_, err := w.SuspendActor(callCtx, actorRef, mode.suspendMode)
+				_, _, err := w.SuspendActor(callCtx, actorRef, mode.suspendMode, lifecycleConditions{})
 				if got := apierror.Code(err); got != tt.wantCode {
 					t.Fatalf("SuspendActor error = %v (code %v), want %v", err, got, tt.wantCode)
 				}
@@ -119,7 +119,7 @@ func TestSuspendActor_CheckpointError(t *testing.T) {
 				atelet.mu.Lock()
 				atelet.onCheckpoint = nil
 				atelet.mu.Unlock()
-				finished, err := w.SuspendActor(ctx, actorRef, mode.suspendMode)
+				finished, _, err := w.SuspendActor(ctx, actorRef, mode.suspendMode, lifecycleConditions{})
 				if err != nil {
 					t.Fatalf("SuspendActor retry: %v", err)
 				}
@@ -166,7 +166,7 @@ func TestSuspendActor_MarkedSuspending_SnapshotURI(t *testing.T) {
 		},
 	})
 	w := newMarkOnlyWorkflow(persistence)
-	_, err := w.SuspendActor(ctx, actorRef, suspendSync)
+	_, _, err := w.SuspendActor(ctx, actorRef, suspendSync, lifecycleConditions{})
 	assertStoppedAtDial(t, err)
 	marked := mustReadActor(t, ctx, persistence, actorRef)
 
@@ -228,7 +228,7 @@ func TestSuspendActor_MarkedSuspending_ReentryKeepsPersistedSnapshotLocation(t *
 					},
 				},
 			})
-			suspended, err := w.SuspendActor(ctx, actorRef, tt.mode)
+			suspended, _, err := w.SuspendActor(ctx, actorRef, tt.mode, lifecycleConditions{})
 			if err != nil {
 				t.Fatalf("SuspendActor: %v", err)
 			}
@@ -293,7 +293,7 @@ func TestSuspendActorWorkflow_SuspendedReturnsAsIs(t *testing.T) {
 				seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED, tc.seedOpts...)
 				seeded := mustReadActor(t, ctx, st, actorRef)
 
-				returned, err := w.SuspendActor(ctx, actorRef, mode.suspendMode)
+				returned, _, err := w.SuspendActor(ctx, actorRef, mode.suspendMode, lifecycleConditions{})
 				if err != nil {
 					t.Fatalf("SuspendActor: %v", err)
 				}
@@ -328,7 +328,7 @@ func TestSuspendActor_MarkedSuspending_StateMatrix(t *testing.T) {
 					a.Status.WorkerAssignment = wireTestAssignment()
 				})
 
-				_, err := w.SuspendActor(ctx, actorRef, mode.suspendMode)
+				_, _, err := w.SuspendActor(ctx, actorRef, mode.suspendMode, lifecycleConditions{})
 				stored := mustReadActor(t, ctx, persistence, actorRef)
 				switch seedState {
 				case ateapi.ActorState_ACTOR_STATE_RUNNING, ateapi.ActorState_ACTOR_STATE_SUSPENDING:
@@ -374,7 +374,7 @@ func TestSuspendActor_CrashesWhenSuspendingActorMissingWorkerPod(t *testing.T) {
 
 	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDING)
 
-	_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, suspendSync)
+	_, _, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, suspendSync, lifecycleConditions{})
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 	}
@@ -453,7 +453,7 @@ func TestSuspendActor_AteletSuspended_DialFailureLeavesActorRetryable(t *testing
 			storetest.MustCreateActor(t, ctx, persistence, actor)
 
 			w := newMarkOnlyWorkflow(persistence)
-			_, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, suspendSync)
+			_, _, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, suspendSync, lifecycleConditions{})
 			assertStoppedAtDial(t, err)
 
 			// A dial failure is transient from this workflow's point of view: it
@@ -505,7 +505,7 @@ func TestSuspendActor_AteletSuspended_WireRequest(t *testing.T) {
 		},
 	})
 
-	if _, err := w.SuspendActor(ctx, actorRef, suspendSync); err != nil {
+	if _, _, err := w.SuspendActor(ctx, actorRef, suspendSync, lifecycleConditions{}); err != nil {
 		t.Fatalf("SuspendActor: %v", err)
 	}
 	req := atelet.checkpointRequest()
@@ -593,7 +593,7 @@ func TestSuspendActor_Finalized_ReleasesReplacedSnapshot(t *testing.T) {
 				}
 			})
 
-			stored, err := w.SuspendActor(ctx, actorRef, suspendSync)
+			stored, _, err := w.SuspendActor(ctx, actorRef, suspendSync, lifecycleConditions{})
 			if err != nil {
 				t.Fatalf("SuspendActor: %v", err)
 			}
@@ -678,7 +678,7 @@ func TestSuspendActor_Finalized_PauseReleasesReplacedSnapshot(t *testing.T) {
 				Object:       &ateletpb.ObjectStorage{SnapshotUri: paused.String()},
 			}}}
 
-			stored, err := w.SuspendActor(ctx, actorRef, suspendAsync)
+			stored, _, err := w.SuspendActor(ctx, actorRef, suspendAsync, lifecycleConditions{})
 			if err != nil {
 				t.Fatalf("SuspendActor: %v", err)
 			}
@@ -737,7 +737,7 @@ func TestSnapshotLocationChange_LeavesNothingBehind(t *testing.T) {
 		}
 	})
 
-	stored, err := w.ensureSuspendedFinalized(ctx, actorRef, suspendSync, nil)
+	stored, _, err := w.ensureSuspendedFinalized(ctx, actorRef, suspendSync, nil, nil)
 	if err != nil {
 		t.Fatalf("ensureSuspendedFinalized: %v", err)
 	}
@@ -803,7 +803,7 @@ func TestSuspendActor_Finalized_CommitsDespiteObjectStoreFailure(t *testing.T) {
 	})
 
 	objects.OnDelete = func(string, string) error { return errObjectStore }
-	stored, err := w.SuspendActor(ctx, actorRef, suspendSync)
+	stored, _, err := w.SuspendActor(ctx, actorRef, suspendSync, lifecycleConditions{})
 	if err != nil {
 		t.Fatalf("SuspendActor: %v", err)
 	}
@@ -860,7 +860,7 @@ func TestSuspendActor_Finalized_KeepsReplacedSnapshotOnConflict(t *testing.T) {
 		}
 	})
 
-	if _, err := w.SuspendActor(ctx, actorRef, suspendSync); apierror.Code(err) != codes.Aborted {
+	if _, _, err := w.SuspendActor(ctx, actorRef, suspendSync, lifecycleConditions{}); apierror.Code(err) != codes.Aborted {
 		t.Fatalf("SuspendActor = %v, want code Aborted", err)
 	}
 	// Every actor update conflicts, so pin that the Aborted came from finalize
@@ -909,7 +909,7 @@ func TestSuspendActor_Finalized_KeepsCrashFromWorkerDelete(t *testing.T) {
 	seedWireWorker(t, ctx, persistence, assignmentOf(created))
 
 	w, _ := newWireCaptureWorkflow(t, workerDeletedDuringReleaseStore{Interface: persistence})
-	_, err := w.SuspendActor(ctx, actorRef, suspendSync)
+	_, _, err := w.SuspendActor(ctx, actorRef, suspendSync, lifecycleConditions{})
 	assertConcurrentCrashKept(t, ctx, persistence, actorRef, err, "suspend failed: "+crashMessageWorkerPodGone)
 }
 
@@ -972,7 +972,7 @@ func TestSuspendActor_Finalized_ReleasesOnlyOwnWorker(t *testing.T) {
 				ActorUid: uid,
 			})
 
-			if _, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, suspendSync); err != nil {
+			if _, _, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, suspendSync, lifecycleConditions{}); err != nil {
 				t.Fatalf("SuspendActor: %v", err)
 			}
 
@@ -1031,7 +1031,7 @@ func TestSuspendActor_Finalized_MissingDurableSnapshotClearsAssignment(t *testin
 		s.Snapshots = nil
 	})
 
-	if _, err := w.SuspendActor(ctx, actorRef, suspendSync); apierror.Code(err) != codes.FailedPrecondition {
+	if _, _, err := w.SuspendActor(ctx, actorRef, suspendSync, lifecycleConditions{}); apierror.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
 	}
 	got, err := st.GetActor(ctx, actorRef)
@@ -1249,7 +1249,7 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 					seedWireWorker(t, ctx, persistence, assignment)
 					w, atelet := newWireCaptureWorkflow(t, persistence)
 
-					_, err := w.SuspendActor(ctx, actorRef, mode.suspendMode)
+					_, _, err := w.SuspendActor(ctx, actorRef, mode.suspendMode, lifecycleConditions{})
 					stored := mustReadActor(t, ctx, persistence, actorRef)
 					got := suspendOutcome{
 						code:         apierror.Code(err),
@@ -1303,7 +1303,7 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 				s.WorkerAssignment = nil
 			})
 
-			returned, err := w.SuspendActor(ctx, actorRef, mode.suspendMode)
+			returned, _, err := w.SuspendActor(ctx, actorRef, mode.suspendMode, lifecycleConditions{})
 			if got := apierror.Code(err); got != codes.FailedPrecondition {
 				t.Fatalf("%s: code = %v (err %v), want FailedPrecondition", mode.name, got, err)
 			}
@@ -1342,7 +1342,7 @@ func TestSuspendAndPause_InvalidStorageLocationRejected(t *testing.T) {
 				},
 			})
 
-			if _, err := w.SuspendActor(ctx, actorRef, mode.suspendMode); err == nil {
+			if _, _, err := w.SuspendActor(ctx, actorRef, mode.suspendMode, lifecycleConditions{}); err == nil {
 				t.Fatalf("%s: expected error for invalid storage location, got nil", mode.name)
 			}
 			stored := mustReadActor(t, ctx, persistence, actorRef)
@@ -1579,7 +1579,7 @@ func TestSuspendActor_AppliesCheckpointState(t *testing.T) {
 				return nil
 			}
 
-			_, err := w.SuspendActor(ctx, actorRef, tt.mode)
+			_, _, err := w.SuspendActor(ctx, actorRef, tt.mode, lifecycleConditions{})
 			stored := mustReadActor(t, ctx, persistence, actorRef)
 			if tt.wantCode != codes.OK {
 				if got := apierror.Code(err); got != tt.wantCode {
@@ -1683,7 +1683,7 @@ func TestSuspendActor_Finalized_RecordsLocalCopyWhenKept(t *testing.T) {
 				return nil
 			}
 
-			if _, err := w.SuspendActor(ctx, actorRef, suspendSync); err != nil {
+			if _, _, err := w.SuspendActor(ctx, actorRef, suspendSync, lifecycleConditions{}); err != nil {
 				t.Fatalf("suspend: %v", err)
 			}
 			stored := mustReadActor(t, ctx, persistence, actorRef)

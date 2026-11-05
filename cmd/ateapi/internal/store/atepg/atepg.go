@@ -62,7 +62,8 @@ const (
 
 type Persistence struct {
 	pool *pgxpool.Pool
-	// watchPool serves WatchWorkers pollers and expired-lease cleanup.
+	// watchPool serves WatchWorkers pollers and expired-lease and
+	// lifecycle-receipt cleanup.
 	// ownerPool applies migrations and maintains outbox partitions.
 	// probePool serves only Ping, so request traffic can never hold the
 	// connection a readiness probe needs.
@@ -493,7 +494,8 @@ func pgErrConstraint(err error) string {
 }
 
 const (
-	// Paces the maintenance loop (outbox partitions and expired leases).
+	// Paces the maintenance loop (outbox partitions, expired leases and
+	// expired lifecycle receipts).
 	maintenanceInterval = time.Minute
 
 	// Bounds a maintenance pass to prevent indefinite hangs (e.g., from lock waits)
@@ -501,8 +503,9 @@ const (
 	maintenancePassTimeout = 5 * time.Minute
 )
 
-// Maintains worker_outbox partitions and reaps expired leases on a fixed
-// timer. The two are independent: a failure in one still lets the other run.
+// Maintains worker_outbox partitions and reaps expired leases and lifecycle
+// receipts on a fixed timer. The three are independent: a failure in one
+// still lets the others run.
 func (p *Persistence) maintenance(ctx context.Context) {
 	ticker := time.NewTicker(maintenanceInterval)
 	defer ticker.Stop()
@@ -520,6 +523,11 @@ func (p *Persistence) maintenance(ctx context.Context) {
 			slog.WarnContext(ctx, "expired lease cleanup failed", slog.Int64("deleted", deleted), slog.Any("err", err))
 		} else if deleted > 0 {
 			slog.InfoContext(ctx, "removed expired PostgreSQL leases", slog.Int64("deleted", deleted))
+		}
+		if deleted, err := p.cleanupExpiredLifecycleReceipts(passCtx); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "expired lifecycle receipt cleanup failed", slog.Any("err", err))
+		} else if deleted > 0 {
+			slog.InfoContext(ctx, "removed expired actor lifecycle receipts", slog.Int64("deleted", deleted))
 		}
 		cancel()
 	}

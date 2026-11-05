@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
@@ -99,6 +100,23 @@ type Interface interface {
 	// are not checked here; the service layer enforces them via declarative
 	// validation before the write.
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
+
+	// GetActorLifecycleReceipt returns the unexpired receipt stored for
+	// requestID under the Actor name in actorRef. Returns ErrNotFound if there
+	// is none.
+	GetActorLifecycleReceipt(ctx context.Context, actorRef resources.ActorRef, requestID string) (*ateapi.LifecycleReceipt, error)
+
+	// UpdateActorWithReceipt is UpdateActor that also stores a lifecycle
+	// receipt in the same transaction. A nil mutate leaves the actor
+	// unwritten, but precondition must still hold. receipt builds the receipt
+	// from the actor as stored.
+	//
+	// With create, it stores a new receipt, stamped with create_time and an
+	// expire_time LifecycleReceiptRetention later, and returns ErrAlreadyExists
+	// if the request already has an unexpired one. Otherwise it replaces the
+	// stored receipt, keeping its timestamps, and returns ErrVersionConflict if
+	// there is none, for example because it expired.
+	UpdateActorWithReceipt(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error, receipt func(stored *ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.LifecycleReceipt, error)
 
 	// MarkActorForDeletion initiates the deletion of an actor. It sets
 	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
@@ -323,6 +341,10 @@ type Interface interface {
 	// Returns ErrLeaseConflict if the lease is already held by another client.
 	AcquireLease(ctx context.Context, key string) (*Lease, error)
 }
+
+// LifecycleReceiptRetention is how long the store keeps a lifecycle receipt
+// after creating it.
+const LifecycleReceiptRetention = 24 * time.Hour
 
 // Precondition guards an update with the uid and version the caller observed:
 // the write lands only if the stored object still matches both. Both fields are
