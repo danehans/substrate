@@ -1825,10 +1825,38 @@ message SuspendActorRequest {
   //
   // +k8s:optional
   SuspendOptions options = 2;
+
+  // expected_uid, if set, suspends the Actor only if it has this uid. A
+  // mismatch fails with FAILED_PRECONDITION and changes nothing.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string expected_uid = 3;
+
+  // expected_activation, if set, suspends the Actor only while its
+  // status.activation_id is this one. ateapi checks it under the Actor's
+  // lease and again in the write that marks the Actor SUSPENDING, before the
+  // checkpoint. A mismatch fails with FAILED_PRECONDITION and changes nothing.
+  // A SUSPENDED Actor holds no activation, so it never matches.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string expected_activation = 4;
+
+  // request_id, if set, makes the call idempotent. See LifecycleReceipt.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string request_id = 5;
 }
 
 message SuspendActorResponse {
+  // actor is the Actor after the suspend. Unset when the response replays a
+  // stored receipt.
   Actor actor = 1;
+
+  // receipt is set when the request set request_id.
+  LifecycleReceipt receipt = 2;
 }
 
 // SuspendOptions tunes how SuspendActor persists the actor's snapshot.
@@ -1863,14 +1891,116 @@ message ResumeActorRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // expected_uid, if set, resumes the Actor only if it has this uid. A
+  // mismatch fails with FAILED_PRECONDITION and changes nothing.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string expected_uid = 2;
+
+  // expected_activation, if set, resumes the Actor only while its
+  // status.activation_id is this one. A SUSPENDED Actor holds no activation,
+  // so it never matches; a RESUMING or RUNNING one does. ateapi checks it under the Actor's lease and again in the write
+  // that marks the Actor RESUMING. A mismatch fails with FAILED_PRECONDITION
+  // and changes nothing.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string expected_activation = 3;
+
+  // request_id, if set, makes the call idempotent. See LifecycleReceipt.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string request_id = 4;
 }
 
 message ResumeActorResponse {
+  // actor is the Actor after the resume. Unset when the response replays a
+  // stored receipt.
   Actor actor = 1;
 
   // True if a resume workflow was executed to activate the actor.
-  // False if the actor was already RUNNING.
+  // False if the actor was already RUNNING, or the response replays a stored
+  // receipt.
   bool resumed = 2;
+
+  // receipt is set when the request set request_id.
+  LifecycleReceipt receipt = 3;
+}
+
+// LifecycleReceipt records what a SuspendActor or ResumeActor call that set
+// request_id did.
+//
+// ateapi stores the receipt in the write that commits the call's transition,
+// keyed by the atespace, the Actor name and request_id. A later call with the
+// same key returns the stored receipt and does nothing else, even if the
+// Actor has since moved to another activation or been replaced. A call that
+// reuses the key with a different operation, expected_uid,
+// expected_activation or durability mode fails with ALREADY_EXISTS.
+//
+// A receipt in SUSPENDING or RESUMING records a call that committed its
+// transition and did not finish. A retry continues it only while the Actor
+// is still in that state under the same uid and activation, and otherwise
+// returns the receipt as it is.
+//
+// ateapi keeps a receipt for 24 hours after it is created, including after
+// the Actor is deleted. Deleting the atespace deletes its receipts.
+message LifecycleReceipt {
+  // request_id is the caller's request_id.
+  string request_id = 1;
+
+  // operation is the call that stored the receipt.
+  LifecycleOperation operation = 2;
+
+  // actor names the Actor the call addressed.
+  ObjectRef actor = 3;
+
+  // actor_uid is the uid of the Actor the call acted on.
+  string actor_uid = 4;
+
+  // expected_uid is the call's expected_uid.
+  string expected_uid = 5;
+
+  // expected_activation is the call's expected_activation.
+  string expected_activation = 6;
+
+  // activation_id is the activation the call affected. For a suspend, it is
+  // the activation the call stopped, and is empty if the Actor was already
+  // SUSPENDED. For a resume, it is the activation the call started, or the
+  // one the Actor was already RUNNING under.
+  string activation_id = 7;
+
+  // transitioned is true if the call ran the transition, and false if the
+  // Actor was already in the target state.
+  bool transitioned = 8;
+
+  // state is the Actor's state when the receipt was written: SUSPENDED or
+  // RUNNING once the call finished, SUSPENDING or RESUMING before.
+  ActorState state = 9;
+
+  // mode is the durability mode of a suspend. Unspecified for a resume.
+  DurabilityMode mode = 10;
+
+  // snapshot_durable is true if the suspended Actor's latest snapshot was
+  // complete in durable storage when the receipt was written. An
+  // asynchronous suspend's upload can finish later; the receipt keeps its
+  // original value. False for a resume.
+  bool snapshot_durable = 11;
+
+  // create_time is when ateapi first stored the receipt.
+  google.protobuf.Timestamp create_time = 12;
+
+  // expire_time is when ateapi may delete the receipt.
+  google.protobuf.Timestamp expire_time = 13;
+}
+
+// LifecycleOperation names the call a LifecycleReceipt records.
+enum LifecycleOperation {
+  LIFECYCLE_OPERATION_UNSPECIFIED = 0;
+  LIFECYCLE_OPERATION_SUSPEND = 1;
+  LIFECYCLE_OPERATION_RESUME = 2;
 }
 
 // RevertActorRequest identifies the Actor to revert.
@@ -2112,6 +2242,17 @@ message DeleteOptions {
   // +k8s:optional
   // +k8s:format=k8s-uuid
   string uid = 2;
+
+  // Delete only while the Actor's status.activation_id is this one, that is,
+  // the run the caller observed is still the current one. ateapi checks it
+  // in the write that marks the Actor DELETING, and fails with
+  // FAILED_PRECONDITION on a mismatch. An Actor already DELETING is not
+  // checked. Only DeleteActor accepts it; other deletes fail with
+  // INVALID_ARGUMENT. Empty skips the check.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string expected_activation = 3;
 }
 
 // ListOptions are the pagination controls a List request may carry.
