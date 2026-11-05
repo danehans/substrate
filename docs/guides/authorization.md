@@ -229,7 +229,7 @@ certificate.
 | `ReportActorCrashed` | `atelet` on the node of the worker hosting the actor |
 | `RequestActorSuspend` | `atelet` on the node of the worker hosting the actor |
 | `MintWorkerActorJwt` | `atelet` on the node hosting the actor |
-| `MintWorkerActorCertificate` | `atelet` on the node of the worker the actor is assigned to |
+| `MintWorkerActorCertificate` | `atelet` on the node of the worker the actor is assigned to, for the actor's current activation |
 | `ReportActorSnapshotState` | `atelet` on the node the actor is placed on |
 
 ### Every RPC

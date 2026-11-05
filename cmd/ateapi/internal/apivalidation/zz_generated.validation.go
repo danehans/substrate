@@ -6224,6 +6224,37 @@ func Validate_MintWorkerActorCertificateRequest(
 		errs = append(errs, fn(fldPath.Child("worker"), obj.Worker, oldVal, oldObj != nil)...)
 	}
 
+	{ // field v1.MintWorkerActorCertificateRequest.ActivationId
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 26); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.MintWorkerActorCertificateRequest) *string {
+				return &oldObj.ActivationId
+			})
+		errs = append(errs, fn(fldPath.Child("activation_id"), &obj.ActivationId, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 

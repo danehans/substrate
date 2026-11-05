@@ -61,6 +61,7 @@ func (b *workerSupportServer) MintActorCertificate(ctx context.Context, req *ate
 		},
 		ActorUid:                  req.GetActorUid(),
 		CertificateSigningRequest: req.GetCertificateSigningRequest(),
+		ActivationId:              req.GetActivationId(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mint actor certificate: %w", err)

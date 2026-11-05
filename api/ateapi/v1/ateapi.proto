@@ -2880,6 +2880,17 @@ message MintWorkerActorCertificateRequest {
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef worker = 4;
+
+  // The activation the requesting Worker was given on Run or Restore, from
+  // ActorStatus.activation_id. The request is refused with ABORTED unless it
+  // equals the Actor's current activation_id, so a Worker cannot mint for an
+  // earlier or a later activation. Empty matches only an Actor with no
+  // activation. The issued certificate's ActorIdentity extension carries it
+  // as ActivationId.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string activation_id = 5;
 }
 
 // Response message for MintWorkerActorCertificate.

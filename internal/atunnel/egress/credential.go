@@ -40,6 +40,7 @@ type BrokerCertificateSource struct {
 	actorAtespace string
 	actorName     string
 	actorUID      string
+	activationID  string
 
 	tlsConfig  *tls.Config
 	privateKey *ecdsa.PrivateKey
@@ -62,6 +63,10 @@ type BrokerConfig struct {
 	ActorAtespace string
 	ActorName     string
 	ActorUID      string
+	// ActorActivationID is the activation this source mints for, from Run or
+	// Restore. Every mint, including renewals, sends it; empty when the
+	// control plane recorded no activation.
+	ActorActivationID string
 
 	// AteletSPIFFEID is the identity the node-local atelet must present on the
 	// credential broker connection. It names atelet's namespace, not this
@@ -98,6 +103,7 @@ func NewBrokerCertificateSource(cfg BrokerConfig) (*BrokerCertificateSource, err
 		actorAtespace: cfg.ActorAtespace,
 		actorName:     cfg.ActorName,
 		actorUID:      cfg.ActorUID,
+		activationID:  cfg.ActorActivationID,
 		tlsConfig:     tlsConfig,
 		privateKey:    privateKey,
 	}, nil
@@ -149,6 +155,7 @@ func (s *BrokerCertificateSource) mintOnce(ctx context.Context, csr []byte) (tim
 		ActorName:                 s.actorName,
 		ActorUid:                  s.actorUID,
 		CertificateSigningRequest: csr,
+		ActivationId:              s.activationID,
 	})
 	if err != nil {
 		return time.Time{}, fmt.Errorf("egress: mint actor certificate: %w", err)

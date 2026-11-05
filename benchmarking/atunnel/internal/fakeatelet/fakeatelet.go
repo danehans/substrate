@@ -111,7 +111,7 @@ func (s *Server) MintActorCertificate(_ context.Context, req *ateletpb.MintActor
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		URIs:         []*url.URL{id},
 	}
-	actor := &substratex509.ActorIdentity{Atespace: req.GetActorAtespace(), ActorName: req.GetActorName(), ActorUid: req.GetActorUid()}
+	actor := &substratex509.ActorIdentity{Atespace: req.GetActorAtespace(), ActorName: req.GetActorName(), ActorUid: req.GetActorUid(), ActivationId: req.GetActivationId()}
 	if err := substratex509.AddActorIdentityToCertificate(actor, template); err != nil {
 		return nil, err
 	}
