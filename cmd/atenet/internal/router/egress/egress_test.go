@@ -733,6 +733,15 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 			want: envoy_type.StatusCode_Forbidden,
 		},
 		{
+			name: "running actor is quarantined",
+			actor: func() *ateapi.Actor {
+				a := runningActor()
+				a.Status.Quarantine = &ateapi.ActorQuarantine{RequestId: "q-1"}
+				return a
+			}(),
+			want: envoy_type.StatusCode_Forbidden,
+		},
+		{
 			name: "actor no longer exists",
 			err:  status.Error(codes.NotFound, "no such actor"),
 			want: envoy_type.StatusCode_Forbidden,
