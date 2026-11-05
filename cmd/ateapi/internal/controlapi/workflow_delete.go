@@ -266,6 +266,10 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		if got := toUpdate.GetStatus().GetActivationId(); expectedActivation != "" && got != expectedActivation {
 			return apierror.FailedPrecondition("Actor %s holds activation %q, not the expected %q", actorRef, got, expectedActivation)
 		}
+		// A held actor keeps its snapshots until every hold is released.
+		if err := checkNotHeld(actorRef, toUpdate); err != nil {
+			return err
+		}
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_DELETING
 		return nil
 	})

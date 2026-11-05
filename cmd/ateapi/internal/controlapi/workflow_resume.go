@@ -59,6 +59,10 @@ type restoreTelemetry struct {
 // anything, and again in the write that marks the actor RESUMING. With a
 // request_id, the call returns the receipt it stored, or replays the stored
 // one with no actor; see LifecycleReceipt.
+//
+// A held actor is refused with checkNotHeld's error, even if it is RUNNING.
+// The hold is checked after the lease and again in the writes that mark the
+// actor RESUMING and RUNNING, so a hold placed during a resume stops it.
 func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef, cond lifecycleConditions) (_ *ateapi.Actor, resumed bool, _ *ateapi.LifecycleReceipt, err error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	start := time.Now()
@@ -95,6 +99,9 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 			if err := cond.check(actorRef, actor); err != nil {
 				return nil, false, nil, err
 			}
+			if err := checkNotHeld(actorRef, actor); err != nil {
+				return nil, false, nil, err
+			}
 			return actor, false, nil, nil
 		}
 	}
@@ -120,6 +127,12 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, stored, nil
 	}
 	if err != nil {
+		return nil, false, nil, err
+	}
+	if err := checkNotHeld(actorRef, actor); err != nil {
+		if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RESUMING {
+			w.terminateHeldRestore(leaseCtx, actorRef, actor, actorTemplate)
+		}
 		return nil, false, nil, err
 	}
 	if !call.continues {
@@ -163,11 +176,26 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, nil, err
 	}
 	running, receipt, err := w.finalizeRunning(leaseCtx, actorRef, actor.GetStatus().GetActivationId(), workerEpoch, call)
+	if errors.Is(err, errHeldAtWrite) {
+		w.terminateHeldRestore(leaseCtx, actorRef, actor, actorTemplate)
+		return nil, false, nil, actorHeldError(actorRef)
+	}
 	if err != nil {
 		return nil, false, nil, err
 	}
 	actor = running
 	return actor, true, receipt, nil
+}
+
+// terminateHeldRestore stops any workload restored for a held RESUMING actor.
+// The actor stays RESUMING until the last hold is released; a resume after
+// that restores it again under a new activation. Every resume the hold
+// refuses tries again, so a failure here is only logged.
+func (w *ActorWorkflow) terminateHeldRestore(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) {
+	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationResume); err != nil {
+		slog.ErrorContext(ctx, "Failed to terminate the workload restored for a held actor",
+			slog.Any("actor", actorRef), slog.Any("err", err))
+	}
 }
 
 // recordAlreadyRunning stores the receipt of a resume that found the actor
@@ -474,6 +502,9 @@ func (w *ActorWorkflow) rotateActivation(ctx context.Context, actorRef resources
 		if err := call.checkInWrite(toUpdate); err != nil {
 			return err
 		}
+		if err := checkNotHeld(actorRef, toUpdate); err != nil {
+			return err
+		}
 		toUpdate.Status.ActivationId = activationID
 		return nil
 	}, resumingReceipt)
@@ -583,6 +614,9 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	activationID := newActivationID()
 	storedActor, _, err := call.bindActorToWorker(ctx, w.store, assignedWorker.GetMetadata().GetName(), assignment, admit, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
 		if err := call.checkInWrite(toUpdate); err != nil {
+			return err
+		}
+		if err := checkNotHeld(actorRef, toUpdate); err != nil {
 			return err
 		}
 		newAssignment := workerAssignmentFrom(bound, snapRuntime)
@@ -998,6 +1032,9 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	storedActor, receipt, err := call.updateActor(ctx, w.store, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
 		if got := toUpdate.GetStatus().GetActivationId(); got != activationID {
 			return apierror.Aborted("actor %s holds activation %q, not %q, which was restored", actorRef, got, activationID)
+		}
+		if len(toUpdate.GetStatus().GetHolds()) > 0 {
+			return errHeldAtWrite
 		}
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 		toUpdate.Status.WorkerAssignment.WorkerEpoch = workerEpoch

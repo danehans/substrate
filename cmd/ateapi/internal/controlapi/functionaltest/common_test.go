@@ -34,6 +34,7 @@ import (
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/principal"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
@@ -46,6 +47,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -239,6 +241,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		ateinterceptors.ServerUnaryInterceptor,
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
 		preview.UnaryServerInterceptor,
+		testPrincipalInterceptor,
 	))
 	ateapi.RegisterControlServer(grpcServer, service)
 
@@ -913,3 +916,20 @@ func assertSpanStr(t *testing.T, attrs map[attribute.Key]attribute.Value, key at
 
 // foreignUID matches no stored object, for guards that must miss.
 const foreignUID = "0f0e0d0c-0b0a-4908-8706-050403020100"
+
+// testPrincipalHeader names the caller principal of a test request. The test
+// server has no authentication, so this stands in for it.
+const testPrincipalHeader = "x-test-principal"
+
+// testPrincipalInterceptor makes the testPrincipalHeader value the caller.
+func testPrincipalInterceptor(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	if ids := metadata.ValueFromIncomingContext(ctx, testPrincipalHeader); len(ids) == 1 {
+		ctx = principal.InjectContext(ctx, principal.PrincipalInfo{ID: ids[0], Kind: principal.KindJWT})
+	}
+	return handler(ctx, req)
+}
+
+// asPrincipal returns ctx with id as the caller of its requests.
+func asPrincipal(ctx context.Context, id string) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, testPrincipalHeader, id)
+}

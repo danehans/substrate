@@ -103,6 +103,11 @@ func TestValidateCreateGlobalAccessPolicyRequest(t *testing.T) {
 		})},
 		wantError: field.ErrorList{field.Invalid(accessPolicyPath.Child("metadata", "name"), nil, "").WithOrigin("custom=default")},
 	}, {
+		name: "hold_manager role",
+		req: &ateapi.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapi.AccessPolicy) {
+			p.Bindings[0].Role = authz.RoleHoldManager
+		})},
+	}, {
 		// editor is an atespace-only role.
 		name: "editor role",
 		req: &ateapi.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapi.AccessPolicy) {
@@ -265,6 +270,11 @@ func TestValidateCreateAtespaceAccessPolicyRequest(t *testing.T) {
 		name: "valid with editor role",
 		req: &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapi.AccessPolicy) {
 			p.Bindings[1].Role = authz.RoleEditor
+		})},
+	}, {
+		name: "valid with hold_manager role",
+		req: &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapi.AccessPolicy) {
+			p.Bindings[1].Role = authz.RoleHoldManager
 		})},
 	}, {
 		name:      "missing atespace",
