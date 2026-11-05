@@ -63,6 +63,18 @@ service Control {
     option (method).resource = "Actor";
   }
 
+  // Place the caller's hold on an actor. While the actor has any hold,
+  // ResumeActor and DeleteActor fail with FAILED_PRECONDITION. A hold does not
+  // stop a running actor, or keep it from being suspended or reverted.
+  rpc HoldActor(HoldActorRequest) returns (HoldActorResponse) {
+    option (method).resource = "Actor";
+  }
+
+  // Release a hold the caller placed. Releasing does not resume the actor.
+  rpc ReleaseActorHold(ReleaseActorHoldRequest) returns (ReleaseActorHoldResponse) {
+    option (method).resource = "Actor";
+  }
+
   // Get the egress policy resource nested under an Actor.
   rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy) {
     option (method).resource = "EgressPolicy";
@@ -954,6 +966,43 @@ message ActorStatus {
   // +k8s:optional
   // +k8s:maxLength=26 # a ULID
   string activation_id = 8;
+
+  // holds lists the Actor's holds, oldest first. Only HoldActor and
+  // ReleaseActorHold change it. While it is not empty, ResumeActor and
+  // DeleteActor fail with FAILED_PRECONDITION.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=16
+  // +k8s:listType=atomic
+  repeated ActorHold holds = 9;
+}
+
+// ActorHold is one holder's hold on an Actor.
+message ActorHold {
+  // holder is "user:" and the ID of the authenticated principal that placed
+  // the hold, as AccessPolicy members name it, for example
+  // "user:spiffe://cluster.local/ns/sec/sa/controller". Only the holder can
+  // release the hold.
+  string holder = 1;
+
+  // reason is the HoldActor call's reason.
+  string reason = 2;
+
+  // incident_id is the HoldActor call's incident_id.
+  string incident_id = 3;
+
+  // request_id is the HoldActor call's request_id. ReleaseActorHold names
+  // the hold by it.
+  string request_id = 4;
+
+  // expected_uid is the HoldActor call's expected_uid.
+  string expected_uid = 5;
+
+  // expected_activation is the HoldActor call's expected_activation.
+  string expected_activation = 6;
+
+  // create_time is when the hold was placed.
+  google.protobuf.Timestamp create_time = 7;
 }
 
 // ActorCrash describes the failure that moved an Actor to CRASHED.
@@ -1923,14 +1972,16 @@ message ResumeActorResponse {
 }
 
 // LifecycleReceipt records what a SuspendActor or ResumeActor call that set
-// request_id did.
+// request_id did, or what a HoldActor or ReleaseActorHold call did.
 //
 // ateapi stores the receipt in the write that commits the call's transition,
 // keyed by the atespace, the Actor name and request_id. A later call with the
 // same key returns the stored receipt and does nothing else, even if the
 // Actor has since moved to another activation or been replaced. A call that
 // reuses the key with a different operation, expected_uid,
-// expected_activation or durability mode fails with ALREADY_EXISTS.
+// expected_activation or durability mode fails with ALREADY_EXISTS, and so
+// does a hold or release from another caller, or with another reason,
+// incident_id or hold_request_id.
 //
 // A receipt in SUSPENDING or RESUMING records a call that committed its
 // transition and did not finish. A retry continues it only while the Actor
@@ -1938,7 +1989,9 @@ message ResumeActorResponse {
 // returns the receipt as it is.
 //
 // ateapi keeps a receipt for 24 hours after it is created, including after
-// the Actor is deleted. Deleting the atespace deletes its receipts.
+// the Actor is deleted. A HoldActor receipt is also kept while its hold
+// exists, and for 24 hours after the release. Deleting the atespace deletes
+// its receipts.
 message LifecycleReceipt {
   // request_id is the caller's request_id.
   string request_id = 1;
@@ -1961,15 +2014,18 @@ message LifecycleReceipt {
   // activation_id is the activation the call affected. For a suspend, it is
   // the activation the call stopped, and is empty if the Actor was already
   // SUSPENDED. For a resume, it is the activation the call started, or the
-  // one the Actor was already RUNNING under.
+  // one the Actor was already RUNNING under. For a hold or a release, it is
+  // the Actor's activation when the receipt was written.
   string activation_id = 7;
 
   // transitioned is true if the call ran the transition, and false if the
-  // Actor was already in the target state.
+  // Actor was already in the target state. A hold always sets it. A release
+  // sets it only if it released a hold.
   bool transitioned = 8;
 
   // state is the Actor's state when the receipt was written: SUSPENDED or
-  // RUNNING once the call finished, SUSPENDING or RESUMING before.
+  // RUNNING once the call finished, SUSPENDING or RESUMING before. A hold
+  // or a release does not change it.
   ActorState state = 9;
 
   // mode is the durability mode of a suspend. Unspecified for a resume.
@@ -1984,8 +2040,15 @@ message LifecycleReceipt {
   // create_time is when ateapi first stored the receipt.
   google.protobuf.Timestamp create_time = 12;
 
-  // expire_time is when ateapi may delete the receipt.
+  // expire_time is when ateapi may delete the receipt. A HoldActor receipt
+  // is kept past it while its hold exists, and for 24 hours after the
+  // release.
   google.protobuf.Timestamp expire_time = 13;
+
+  // hold is the hold a HoldActor call placed or a ReleaseActorHold call
+  // released. For a release that found no such hold, it has only the
+  // holder and request_id the call named.
+  ActorHold hold = 14;
 }
 
 // LifecycleOperation names the call a LifecycleReceipt records.
@@ -1993,6 +2056,104 @@ enum LifecycleOperation {
   LIFECYCLE_OPERATION_UNSPECIFIED = 0;
   LIFECYCLE_OPERATION_SUSPEND = 1;
   LIFECYCLE_OPERATION_RESUME = 2;
+  LIFECYCLE_OPERATION_HOLD = 3;
+  LIFECYCLE_OPERATION_RELEASE_HOLD = 4;
+}
+
+// HoldActorRequest places the caller's hold on an Actor.
+message HoldActorRequest {
+  // actor to hold.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+
+  // reason says why the Actor is held.
+  //
+  // +k8s:required
+  // +k8s:maxLength=1024
+  string reason = 2;
+
+  // incident_id, if set, names the incident the hold belongs to.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string incident_id = 3;
+
+  // expected_uid, if set, holds the Actor only if it has this uid. A
+  // mismatch fails with FAILED_PRECONDITION and changes nothing.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string expected_uid = 4;
+
+  // expected_activation, if set, holds the Actor only while its
+  // status.activation_id is this one. A SUSPENDED Actor holds no activation,
+  // so it never matches. A mismatch fails with FAILED_PRECONDITION and
+  // changes nothing.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string expected_activation = 5;
+
+  // request_id names the hold and makes the call idempotent. No two holds on
+  // an Actor have the same request_id. A retry with the same parameters
+  // returns the original receipt while the hold exists, and for 24 hours
+  // after it is released. See LifecycleReceipt.
+  //
+  // +k8s:required
+  // +k8s:maxLength=128
+  string request_id = 6;
+}
+
+// HoldActorResponse holds the Actor and the receipt of the hold.
+message HoldActorResponse {
+  // actor is the Actor after the hold. Unset when the response replays a
+  // stored receipt.
+  Actor actor = 1;
+
+  // receipt records the hold.
+  LifecycleReceipt receipt = 2;
+}
+
+// ReleaseActorHoldRequest releases one of the caller's holds on an Actor.
+message ReleaseActorHoldRequest {
+  // actor whose hold is released.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+
+  // hold_request_id is the request_id of the HoldActor call that placed the
+  // hold. Only a hold the caller placed is released.
+  //
+  // +k8s:required
+  // +k8s:maxLength=128
+  string hold_request_id = 2;
+
+  // expected_uid, if set, releases the hold only if the Actor has this uid.
+  // A mismatch fails with FAILED_PRECONDITION and changes nothing.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string expected_uid = 3;
+
+  // request_id makes the call idempotent. See LifecycleReceipt.
+  //
+  // +k8s:required
+  // +k8s:maxLength=128
+  string request_id = 4;
+}
+
+// ReleaseActorHoldResponse holds the Actor and the receipt of the release.
+message ReleaseActorHoldResponse {
+  // actor is the Actor after the release. Unset when the response replays a
+  // stored receipt.
+  Actor actor = 1;
+
+  // receipt records the release. transitioned is false if the caller held
+  // no hold with hold_request_id.
+  LifecycleReceipt receipt = 2;
 }
 
 // RevertActorRequest identifies the Actor to revert.
