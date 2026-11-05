@@ -82,6 +82,18 @@ func ValidateReleaseActorHoldRequest(ctx context.Context, req *ateapi.ReleaseAct
 	return Validate_ReleaseActorHoldRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateQuarantineActorRequest(ctx context.Context, req *ateapi.QuarantineActorRequest) field.ErrorList {
+	// Call the generated validation.
+	op := MakeCreateOp(ctx)
+	return Validate_QuarantineActorRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateReleaseQuarantineRequest(ctx context.Context, req *ateapi.ReleaseQuarantineRequest) field.ErrorList {
+	// Call the generated validation.
+	op := MakeCreateOp(ctx)
+	return Validate_ReleaseQuarantineRequest(ctx, op, nil, req, nil)
+}
+
 func ValidateRevertActorRequest(ctx context.Context, req *ateapi.RevertActorRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)

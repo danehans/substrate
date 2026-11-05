@@ -42,6 +42,8 @@ const (
 	Control_DeleteActor_FullMethodName                = "/substrate.ateapi.v1.Control/DeleteActor"
 	Control_HoldActor_FullMethodName                  = "/substrate.ateapi.v1.Control/HoldActor"
 	Control_ReleaseActorHold_FullMethodName           = "/substrate.ateapi.v1.Control/ReleaseActorHold"
+	Control_QuarantineActor_FullMethodName            = "/substrate.ateapi.v1.Control/QuarantineActor"
+	Control_ReleaseQuarantine_FullMethodName          = "/substrate.ateapi.v1.Control/ReleaseQuarantine"
 	Control_GetActorEgressPolicy_FullMethodName       = "/substrate.ateapi.v1.Control/GetActorEgressPolicy"
 	Control_CreateActorEgressPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/CreateActorEgressPolicy"
 	Control_UpdateActorEgressPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/UpdateActorEgressPolicy"
@@ -110,6 +112,16 @@ type ControlClient interface {
 	HoldActor(ctx context.Context, in *HoldActorRequest, opts ...grpc.CallOption) (*HoldActorResponse, error)
 	// Release a hold the caller placed. Releasing does not resume the actor.
 	ReleaseActorHold(ctx context.Context, in *ReleaseActorHoldRequest, opts ...grpc.CallOption) (*ReleaseActorHoldResponse, error)
+	// Quarantine an actor. One write places a hold with the holder
+	// "quarantine" and sets status.quarantine. From then on ateapi refuses to
+	// resume, restore, revert, tag or delete the actor, mints no
+	// worker-for-actor certificate or actor JWT for it, keeps its snapshots,
+	// and fails GetActorEgressPolicy for it. A RUNNING actor is then
+	// suspended at the expected activation. See
+	// docs/guides/actor-quarantine.md.
+	QuarantineActor(ctx context.Context, in *QuarantineActorRequest, opts ...grpc.CallOption) (*QuarantineActorResponse, error)
+	// Release an actor's quarantine. Releasing does not resume the actor.
+	ReleaseQuarantine(ctx context.Context, in *ReleaseQuarantineRequest, opts ...grpc.CallOption) (*ReleaseQuarantineResponse, error)
 	// Get the egress policy resource nested under an Actor.
 	GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
 	// Create the egress policy resource nested under an Actor.
@@ -297,6 +309,26 @@ func (c *controlClient) ReleaseActorHold(ctx context.Context, in *ReleaseActorHo
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReleaseActorHoldResponse)
 	err := c.cc.Invoke(ctx, Control_ReleaseActorHold_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) QuarantineActor(ctx context.Context, in *QuarantineActorRequest, opts ...grpc.CallOption) (*QuarantineActorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QuarantineActorResponse)
+	err := c.cc.Invoke(ctx, Control_QuarantineActor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ReleaseQuarantine(ctx context.Context, in *ReleaseQuarantineRequest, opts ...grpc.CallOption) (*ReleaseQuarantineResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseQuarantineResponse)
+	err := c.cc.Invoke(ctx, Control_ReleaseQuarantine_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -684,6 +716,16 @@ type ControlServer interface {
 	HoldActor(context.Context, *HoldActorRequest) (*HoldActorResponse, error)
 	// Release a hold the caller placed. Releasing does not resume the actor.
 	ReleaseActorHold(context.Context, *ReleaseActorHoldRequest) (*ReleaseActorHoldResponse, error)
+	// Quarantine an actor. One write places a hold with the holder
+	// "quarantine" and sets status.quarantine. From then on ateapi refuses to
+	// resume, restore, revert, tag or delete the actor, mints no
+	// worker-for-actor certificate or actor JWT for it, keeps its snapshots,
+	// and fails GetActorEgressPolicy for it. A RUNNING actor is then
+	// suspended at the expected activation. See
+	// docs/guides/actor-quarantine.md.
+	QuarantineActor(context.Context, *QuarantineActorRequest) (*QuarantineActorResponse, error)
+	// Release an actor's quarantine. Releasing does not resume the actor.
+	ReleaseQuarantine(context.Context, *ReleaseQuarantineRequest) (*ReleaseQuarantineResponse, error)
 	// Get the egress policy resource nested under an Actor.
 	GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error)
 	// Create the egress policy resource nested under an Actor.
@@ -813,6 +855,12 @@ func (UnimplementedControlServer) HoldActor(context.Context, *HoldActorRequest) 
 }
 func (UnimplementedControlServer) ReleaseActorHold(context.Context, *ReleaseActorHoldRequest) (*ReleaseActorHoldResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReleaseActorHold not implemented")
+}
+func (UnimplementedControlServer) QuarantineActor(context.Context, *QuarantineActorRequest) (*QuarantineActorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method QuarantineActor not implemented")
+}
+func (UnimplementedControlServer) ReleaseQuarantine(context.Context, *ReleaseQuarantineRequest) (*ReleaseQuarantineResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseQuarantine not implemented")
 }
 func (UnimplementedControlServer) GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActorEgressPolicy not implemented")
@@ -1098,6 +1146,42 @@ func _Control_ReleaseActorHold_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).ReleaseActorHold(ctx, req.(*ReleaseActorHoldRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_QuarantineActor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QuarantineActorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).QuarantineActor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_QuarantineActor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).QuarantineActor(ctx, req.(*QuarantineActorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ReleaseQuarantine_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseQuarantineRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ReleaseQuarantine(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ReleaseQuarantine_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ReleaseQuarantine(ctx, req.(*ReleaseQuarantineRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1774,6 +1858,14 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReleaseActorHold",
 			Handler:    _Control_ReleaseActorHold_Handler,
+		},
+		{
+			MethodName: "QuarantineActor",
+			Handler:    _Control_QuarantineActor_Handler,
+		},
+		{
+			MethodName: "ReleaseQuarantine",
+			Handler:    _Control_ReleaseQuarantine_Handler,
 		},
 		{
 			MethodName: "GetActorEgressPolicy",
