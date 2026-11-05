@@ -107,7 +107,11 @@ func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapi.De
 		return nil, resources.ToAPIError(errs)
 	}
 
-	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), toDeletePreconditions(req.GetOptions()))
+	precondition, err := toDeletePreconditions(req.GetOptions())
+	if err != nil {
+		return nil, err
+	}
+	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), precondition)
 }
 
 func (s *ServiceImpl) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.EgressPolicy, error) {

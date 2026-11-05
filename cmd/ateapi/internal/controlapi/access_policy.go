@@ -149,7 +149,11 @@ func (s *RPCService) DeleteAtespaceAccessPolicy(ctx context.Context, req *ateapi
 	if errs := apivalidation.ValidateDeleteAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	return s.impl.DeleteAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), toDeletePreconditions(req.GetOptions()))
+	precondition, err := toDeletePreconditions(req.GetOptions())
+	if err != nil {
+		return nil, err
+	}
+	return s.impl.DeleteAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), precondition)
 }
 
 func (s *ServiceImpl) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.AccessPolicy, error) {

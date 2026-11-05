@@ -124,7 +124,11 @@ func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapi.Delete
 	if errs := apivalidation.ValidateDeleteActorTemplateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	return s.actorWorkflow.DeleteActorTemplate(ctx, resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate()), toDeletePreconditions(req.GetOptions()))
+	precondition, err := toDeletePreconditions(req.GetOptions())
+	if err != nil {
+		return nil, err
+	}
+	return s.actorWorkflow.DeleteActorTemplate(ctx, resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate()), precondition)
 }
 
 func (s *ServiceImpl) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {

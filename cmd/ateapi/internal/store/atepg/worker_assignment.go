@@ -70,15 +70,26 @@ func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapi.Worker) error {
 }
 
 func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	updated, _, err := p.bindActorToWorker(ctx, workerName, assignment, admit, actorRef, precondition, mutate, nil, false)
+	return updated, err
+}
+
+func (p *Persistence) BindActorToWorkerWithReceipt(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, receipt func(*ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.LifecycleReceipt, error) {
+	return p.bindActorToWorker(ctx, workerName, assignment, admit, actorRef, precondition, mutate, receipt, create)
+}
+
+// bindActorToWorker binds the Actor and, with a non-nil receipt, stores the
+// receipt in the same transaction.
+func (p *Persistence) bindActorToWorker(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, receipt func(*ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.LifecycleReceipt, error) {
 	actorUID := assignment.GetActorUid()
 	if actorUID == "" {
-		return nil, fmt.Errorf("binding an assignment with no actor_uid to worker %s", workerName)
+		return nil, nil, fmt.Errorf("binding an assignment with no actor_uid to worker %s", workerName)
 	}
 	if err := precondition.Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if precondition.UID != actorUID {
-		return nil, fmt.Errorf("binding actor %s to worker %s under a precondition for actor %s", actorUID, workerName, precondition.UID)
+		return nil, nil, fmt.Errorf("binding actor %s to worker %s under a precondition for actor %s", actorUID, workerName, precondition.UID)
 	}
 	// The store assigns identity. atespace is empty because Workers are
 	// global-scoped; the name is the Actor's UID, which is also the row key.
@@ -86,10 +97,11 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	setCreateMetadata(assignment.Metadata)
 	assignmentBytes, err := proto.Marshal(assignment)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling assignment: %w", err)
+		return nil, nil, fmt.Errorf("marshaling assignment: %w", err)
 	}
 
 	var updated *ateapi.Actor
+	var stored *ateapi.LifecycleReceipt
 	_, err = p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		worker, err := getWorkerForUpdate(ctx, tx, workerName)
 		if errors.Is(err, store.ErrNotFound) {
@@ -113,6 +125,11 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 		if updated, err = updateActor(ctx, tx, actorRef, store.DeletePreconditions(precondition), mutate, false); err != nil {
 			return nil, err
 		}
+		if receipt != nil {
+			if stored, err = storeLifecycleReceipt(ctx, tx, actorRef, updated, receipt, create); err != nil {
+				return nil, err
+			}
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO worker_assignments (actor_uid, worker_name, proto)
 			VALUES ($1, $2, $3)`,
@@ -126,17 +143,29 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 		return worker, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return updated, nil
+	return updated, stored, nil
 }
 
 func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, *ateapi.Worker, error) {
+	updated, released, _, err := p.updateActorAndRelease(ctx, actorRef, precondition, mutate, nil, false)
+	return updated, released, err
+}
+
+func (p *Persistence) UpdateActorAndReleaseWithReceipt(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, receipt func(*ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.Worker, *ateapi.LifecycleReceipt, error) {
+	return p.updateActorAndRelease(ctx, actorRef, precondition, mutate, receipt, create)
+}
+
+// updateActorAndRelease releases the Actor's assignment, writes the Actor and,
+// with a non-nil receipt, stores the receipt in the same transaction.
+func (p *Persistence) updateActorAndRelease(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, receipt func(*ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.Worker, *ateapi.LifecycleReceipt, error) {
 	if err := precondition.Validate(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	actorUID := precondition.UID
 	var updated *ateapi.Actor
+	var stored *ateapi.LifecycleReceipt
 	released, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		released, err := releaseActor(ctx, tx, actorUID)
 		if err != nil {
@@ -147,12 +176,17 @@ func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resour
 		if updated, err = updateActor(ctx, tx, actorRef, store.DeletePreconditions(precondition), mutate, false); err != nil {
 			return nil, err
 		}
+		if receipt != nil {
+			if stored, err = storeLifecycleReceipt(ctx, tx, actorRef, updated, receipt, create); err != nil {
+				return nil, err
+			}
+		}
 		return released, nil
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return updated, released, nil
+	return updated, released, stored, nil
 }
 
 // releaseActor deletes actorUID's assignment, wherever it is, and returns the
