@@ -1774,8 +1774,16 @@ type MintActorCertificateRequest struct {
 	// +k8s:required
 	// +k8s:maxBytes=16384 # matches the control-plane MintWorkerActorCertificateRequest bound this is forwarded to
 	CertificateSigningRequest []byte `protobuf:"bytes,4,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	// The activation the worker was given on Run or Restore, from
+	// ActorStatus.activation_id. Sent unchanged on every renewal within that
+	// activation. The control plane mints only while the Actor still holds
+	// this activation; empty matches only an Actor with no activation.
+	//
+	// +k8s:optional
+	// +k8s:maxLength=26 # a ULID
+	ActivationId  string `protobuf:"bytes,5,opt,name=activation_id,json=activationId,proto3" json:"activation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MintActorCertificateRequest) Reset() {
@@ -1834,6 +1842,13 @@ func (x *MintActorCertificateRequest) GetCertificateSigningRequest() []byte {
 		return x.CertificateSigningRequest
 	}
 	return nil
+}
+
+func (x *MintActorCertificateRequest) GetActivationId() string {
+	if x != nil {
+		return x.ActivationId
+	}
+	return ""
 }
 
 type MintActorCertificateResponse struct {
@@ -4529,13 +4544,14 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\vEgressPorts\x12(\n" +
 	"\x03all\x18\x01 \x01(\v2\x16.atelet.EgressAllPortsR\x03all\x12\x18\n" +
 	"\anumbers\x18\x02 \x03(\x05R\anumbers\"\x10\n" +
-	"\x0eEgressAllPorts\"\xc0\x01\n" +
+	"\x0eEgressAllPorts\"\xe5\x01\n" +
 	"\x1bMintActorCertificateRequest\x12%\n" +
 	"\x0eactor_atespace\x18\x01 \x01(\tR\ractorAtespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12>\n" +
-	"\x1bcertificate_signing_request\x18\x04 \x01(\fR\x19certificateSigningRequest\"M\n" +
+	"\x1bcertificate_signing_request\x18\x04 \x01(\fR\x19certificateSigningRequest\x12#\n" +
+	"\ractivation_id\x18\x05 \x01(\tR\factivationId\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
 	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xa2\x02\n" +
 	"\x10TerminateRequest\x12$\n" +

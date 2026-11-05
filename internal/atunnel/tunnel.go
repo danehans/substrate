@@ -213,6 +213,7 @@ func (t *Tunnel) PrepareEgress(ctx context.Context, actor resources.ActorAttribu
 		ActorAtespace:        actor.Ref.Atespace,
 		ActorName:            actor.Ref.Name,
 		ActorUID:             actor.UID,
+		ActorActivationID:    actor.ActivationID,
 		AteletSPIFFEID:       t.cfg.BrokerIdentity,
 	})
 	if err != nil {

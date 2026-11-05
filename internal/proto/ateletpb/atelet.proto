@@ -438,6 +438,15 @@ message MintActorCertificateRequest {
   // +k8s:required
   // +k8s:maxBytes=16384 # matches the control-plane MintWorkerActorCertificateRequest bound this is forwarded to
   bytes certificate_signing_request = 4;
+
+  // The activation the worker was given on Run or Restore, from
+  // ActorStatus.activation_id. Sent unchanged on every renewal within that
+  // activation. The control plane mints only while the Actor still holds
+  // this activation; empty matches only an Actor with no activation.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string activation_id = 5;
 }
 
 message MintActorCertificateResponse {
