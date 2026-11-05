@@ -30,6 +30,7 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -382,6 +383,41 @@ func TestActorResumer_Parking(t *testing.T) {
 			defer mu.Unlock()
 			if calls < 2 {
 				t.Errorf("expected the resume to be retried at least twice while parked, got %d", calls)
+			}
+		})
+	})
+
+	// ateapi refuses a held actor with TERMINAL_STATE, which no retry clears.
+	t.Run("FailsFastOnTerminalState", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			held, err := status.New(codes.FailedPrecondition, "Actor team-a/actor-park is held until every hold on it is released").
+				WithDetails(&errdetails.ErrorInfo{Domain: "ate.dev", Reason: "TERMINAL_STATE", Metadata: map[string]string{"cause": "ACTOR_HELD"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var calls atomic.Int32
+			mock := &resumerMockClient{
+				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+					calls.Add(1)
+					return nil, held.Err()
+				},
+			}
+
+			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 5 * time.Second}))
+			start := time.Now()
+			_, _, err = resumer.ResumeActor(context.Background(), testActorRef)
+			if got := status.Code(err); got != codes.FailedPrecondition {
+				t.Fatalf("expected FailedPrecondition, got %v (err=%v)", got, err)
+			}
+			var budget *budgetExhaustedError
+			if errors.As(err, &budget) {
+				t.Errorf("a held actor was parked until the budget elapsed: %v", err)
+			}
+			if got := calls.Load(); got != 1 {
+				t.Errorf("expected one resume attempt, got %d", got)
+			}
+			if elapsed := time.Since(start); elapsed != 0 {
+				t.Errorf("expected no wait, waited %v", elapsed)
 			}
 		})
 	})
