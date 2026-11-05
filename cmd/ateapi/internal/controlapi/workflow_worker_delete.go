@@ -276,9 +276,9 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Wor
 	_, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
 		if !wasAlreadyCrashed {
-			toUpdate.Status.Crash = newActorCrash(opName, crashMsg)
+			toUpdate.Status.Crash = newActorCrash(opName, crashMsg, toUpdate.Status.GetActivationId())
 		}
-		toUpdate.Status.WorkerAssignment = nil
+		clearWorkerAssignment(toUpdate.Status)
 		return nil
 	})
 	switch {

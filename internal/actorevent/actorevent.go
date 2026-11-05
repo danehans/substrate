@@ -98,6 +98,9 @@ var (
 		Keys: append(append([]string{}, identityKeys...),
 			string(ateattr.ActorOperationNameKey),
 			string(ateattr.ActorStateKey)),
+
+		// Absent while the actor has no worker assignment.
+		Conditional: []string{string(ateattr.ActorActivationKey)},
 	}
 
 	Crashed = Event{
@@ -107,6 +110,9 @@ var (
 		Keys: append(append([]string{}, identityKeys...),
 			string(ateattr.ActorOperationNameKey),
 			string(ateattr.ActorStateKey)),
+
+		// Absent while the actor has no worker assignment.
+		Conditional: []string{string(ateattr.ActorActivationKey)},
 	}
 
 	UsageSampled = Event{

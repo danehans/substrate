@@ -1296,7 +1296,7 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 			// What a worker delete or the syncer commits: CRASHED with the
 			// crash recorded and the assignment cleared, landing after the
 			// atelet call and before finalize re-reads the actor.
-			originalCrash := newActorCrash(ateattr.OperationDelete, "original crash reason")
+			originalCrash := newActorCrash(ateattr.OperationDelete, "original crash reason", "")
 			updateDuringCheckpoint(t, atelet, persistence, actorRef, func(s *ateapi.ActorStatus) {
 				s.State = ateapi.ActorState_ACTOR_STATE_CRASHED
 				s.Crash = originalCrash

@@ -29,6 +29,9 @@ type ActorAttribution struct {
 	UID              string
 	TemplateAtespace string
 	TemplateName     string
+	// ActivationID is ActorStatus.activation_id, or empty when the actor has
+	// no activation or the source does not carry one.
+	ActivationID string
 }
 
 // ActorAttributionFromActor builds the attribution for a loaded Actor. Nil-safe;
@@ -39,5 +42,6 @@ func ActorAttributionFromActor(a *ateapi.Actor) ActorAttribution {
 		UID:              a.GetMetadata().GetUid(),
 		TemplateAtespace: a.GetActorTemplate().GetAtespace(),
 		TemplateName:     a.GetActorTemplate().GetName(),
+		ActivationID:     a.GetStatus().GetActivationId(),
 	}
 }

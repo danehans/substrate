@@ -69,6 +69,19 @@ groups:
           docs/metrics/substrate.yaml. It separates two actors that held the
           same name at different times.
         examples: [8f2a1c4e6b0d47f1]
+      - id: ate.actor.activation
+        stability: development
+        type: string
+        brief: >
+          The ULID of the actor's current activation, ActorStatus.activation_id.
+        note: >
+          Logs and spans only, by the cardinality rule no-actor-identity in
+          docs/metrics/substrate.yaml. Each resume that writes RESUMING mints
+          one, and a resume that finds the actor RESUMING replaces it. It is
+          absent while the actor has no worker assignment. Unlike
+          ate.actor.epoch, the control plane assigns it, so ateapi and the
+          worker records name the same activation.
+        examples: [01JDQ5W2R3V6Z8B4N7K9M1P0XA]
       - id: ate.actor.epoch
         stability: development
         type: int

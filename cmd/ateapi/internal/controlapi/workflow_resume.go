@@ -22,6 +22,9 @@ import (
 	"slices"
 	"time"
 
+	"github.com/oklog/ulid/v2"
+	"go.opentelemetry.io/otel/trace"
+
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -125,7 +128,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, err
 	}
 	var running *ateapi.Actor
-	if running, err = w.finalizeRunning(leaseCtx, actorRef, workerEpoch); err != nil {
+	if running, err = w.finalizeRunning(leaseCtx, actorRef, actor.GetStatus().GetActivationId(), workerEpoch); err != nil {
 		return nil, false, err
 	}
 	actor = running
@@ -244,8 +247,12 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 		if err != nil {
 			return nil, nil, err
 		}
-		markSkipped(ctx, "actor already RESUMING with a valid worker assignment")
-		return actor, worker, nil
+		markSkipped(ctx, "actor already RESUMING with a valid worker assignment; only its activation is replaced")
+		rotated, err := w.rotateActivation(ctx, actorRef, actor)
+		if err != nil {
+			return nil, nil, err
+		}
+		return rotated, worker, nil
 	case ateapi.ActorState_ACTOR_STATE_SUSPENDED:
 	default:
 		return nil, nil, apierror.FailedPrecondition("AssignWorker prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_SUSPENDED)
@@ -407,6 +414,43 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	return worker, nil
 }
 
+// newActivationID returns the ID of a new activation.
+func newActivationID() string {
+	return ulid.Make().String()
+}
+
+// setActivationSpanAttribute names the activation on the current step span.
+func setActivationSpanAttribute(ctx context.Context, activationID string) {
+	if activationID != "" {
+		trace.SpanFromContext(ctx).SetAttributes(ateattr.ActorActivationKey.String(activationID))
+	}
+}
+
+// rotateActivation replaces the activation of an Actor found RESUMING. The
+// attempt that wrote RESUMING did not finish, and its Run or Restore may have
+// reached the worker, so the restore that follows gets a new ID. It is the one
+// write the re-entry path adds.
+func (w *ActorWorkflow) rotateActivation(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor) (*ateapi.Actor, error) {
+	retired := actor.GetStatus().GetActivationId()
+	activationID := newActivationID()
+	stored, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+		toUpdate.Status.ActivationId = activationID
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
+		}
+		return nil, fmt.Errorf("while replacing the activation of a RESUMING actor: %w", err)
+	}
+	slog.LogAttrs(ctx, slog.LevelInfo, "Replaced the activation of a RESUMING actor",
+		append(ateattr.ActorRefLogAttrs(actorRef),
+			slog.String("retired_activation", retired),
+			slog.String(string(ateattr.ActorActivationKey), activationID))...)
+	setActivationSpanAttribute(ctx, activationID)
+	return stored, nil
+}
+
 // workerHoldingStaleClaim recovers a claim written before the Actor update.
 // It releases the claim if the Worker is no longer eligible.
 func (w *ActorWorkflow) workerHoldingStaleClaim(ctx context.Context, actor *ateapi.Actor, constraints scheduling.Constraints, relaxable bool) (*ateapi.Worker, error) {
@@ -549,10 +593,15 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 
 	newAssignment := workerAssignmentFrom(bound, snapRuntime)
+	// The activation is minted here, not at the claim: a resume that stops
+	// between the two writes leaves none behind, and the next resume recovers
+	// the claim through workerHoldingStaleClaim and mints its own.
+	activationID := newActivationID()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING
 		toUpdate.Status.WorkerAssignment = newAssignment
 		toUpdate.Status.AssignedNode = newAssignment.GetNodeName()
+		toUpdate.Status.ActivationId = activationID
 		return nil
 	})
 	if err != nil {
@@ -577,6 +626,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	pool = bound.GetWorkerPool()
 	class = hardware.SandboxClass(bound.GetStatus())
 	outcome = ateattr.SchedulerOutcomeAssigned
+	setActivationSpanAttribute(ctx, activationID)
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, bound, nil
 }
@@ -765,7 +815,7 @@ func checkVolumesAttachable(volumes []*ateapi.ExternalVolumeStatus) error {
 // actor has no snapshot. This is the atelet reentrancy seam (#372): the
 // request is keyed by the actor UID and
 // the worker pod UID, so a re-entered workflow re-sends the same semantic
-// request; once atelet's Restore/Run are idempotent on those keys this step
+// request under a new activation ID; once atelet's Restore/Run are idempotent on those keys this step
 // becomes fully reentrant with no changes here.
 func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, volumePublishContexts map[string]map[string]string) (tele restoreTelemetry, workerEpoch int64, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletRestore")
@@ -777,6 +827,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	}
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
+	activationID := actor.GetStatus().GetActivationId()
+	setActivationSpanAttribute(ctx, activationID)
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
 		return tele, 0, err
@@ -815,6 +867,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			ActorUid:              actor.GetMetadata().Uid,
 			EgressGateway:         egressGateway,
 			Resources:             actorResources,
+			ActivationId:          activationID,
 		}
 		resp, err := client.Run(ctx, req)
 		if err != nil {
@@ -869,6 +922,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		ActorUid:       actor.GetMetadata().Uid,
 		EgressGateway:  egressGateway,
 		Resources:      actorResources,
+		ActivationId:   activationID,
 	}
 	resp, err := client.Restore(ctx, req)
 	if err != nil {
@@ -903,7 +957,9 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 }
 
 // finalizeRunning re-reads the actor for a fresh version and commits RUNNING,
-// stamped with workerEpoch, the epoch of the worker process that ran it.
+// stamped with workerEpoch, the epoch of the worker process that ran it. The
+// commit requires the Actor to still hold activationID, the activation Run or
+// Restore was sent with.
 //
 // The worker process registered that epoch, with its pod IPs, before it took
 // the workload. If it is still the Worker's registered epoch, the Actor is
@@ -911,9 +967,10 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 // started did not carry. If a later epoch is registered, that process has exited and taken
 // the sandbox with it, so RUNNING is not committed: the error is Unavailable,
 // and the retried resume restores the Actor on the current process.
-func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, workerEpoch int64) (_ *ateapi.Actor, err error) {
+func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, activationID string, workerEpoch int64) (_ *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeRunning")
 	defer func() { err = done(err) }()
+	setActivationSpanAttribute(ctx, activationID)
 
 	latestActor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
@@ -941,6 +998,9 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
+		if got := toUpdate.GetStatus().GetActivationId(); got != activationID {
+			return apierror.Aborted("actor %s holds activation %q, not %q, which was restored", actorRef, got, activationID)
+		}
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 		toUpdate.Status.WorkerAssignment.WorkerEpoch = workerEpoch
 		toUpdate.Status.WorkerAssignment.WorkerPodIps = slices.Clone(worker.GetStatus().GetIps())

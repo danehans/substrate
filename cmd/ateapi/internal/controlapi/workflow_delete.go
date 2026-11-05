@@ -300,7 +300,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 			if dbActor.Status != nil {
 				clearLocalSnapshots(dbActor.Status)
 				dbActor.Status.AssignedNode = ""
-				dbActor.Status.WorkerAssignment = nil
+				clearWorkerAssignment(dbActor.Status)
 			}
 			return nil
 		})

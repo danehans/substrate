@@ -155,6 +155,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		actorDirs:        req.GetActorDirs(),
 		templateAtespace: req.GetActorTemplateAtespace(),
 		templateName:     req.GetActorTemplateName(),
+		activationID:     req.GetActivationId(),
 		containers:       req.GetSpec().GetContainers(),
 		assetPaths:       req.GetRuntimeAssetPaths(),
 		egressGateway:    req.GetEgressGateway(),

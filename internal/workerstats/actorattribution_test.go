@@ -66,6 +66,16 @@ func TestActorAttributionFromRequest(t *testing.T) {
 			want: fullAttribution,
 		},
 		{
+			name: "run request carries its activation",
+			req:  &ateworkerpb.RunWorkloadRequest{ActorUid: "uid-c", ActivationId: "activation-f"},
+			want: resources.ActorAttribution{UID: "uid-c", ActivationID: "activation-f"},
+		},
+		{
+			name: "restore request carries its activation",
+			req:  &ateworkerpb.RestoreWorkloadRequest{ActorUid: "uid-c", ActivationId: "activation-f"},
+			want: resources.ActorAttribution{UID: "uid-c", ActivationID: "activation-f"},
+		},
+		{
 			name: "checkpoint request",
 			req: &ateworkerpb.CheckpointWorkloadRequest{
 				Atespace:              "atespace-a",

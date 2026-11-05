@@ -2152,8 +2152,18 @@ type ActorStatus struct {
 	// +k8s:minimum=0
 	// +k8s:update=NoUnset
 	LastAssignedGeneration int32 `protobuf:"varint,7,opt,name=last_assigned_generation,json=lastAssignedGeneration,proto3" json:"last_assigned_generation,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// activation_id names the Actor's current activation: one Run or Restore on
+	// its assigned worker, up to the write that clears worker_assignment. It is
+	// a ULID, set and cleared in the same writes as worker_assignment. Each
+	// resume that writes RESUMING mints a new one, and a resume that finds the
+	// Actor already RESUMING replaces it before restoring again, so an ID is
+	// never sent on two Run or Restore calls.
+	//
+	// +k8s:optional
+	// +k8s:maxLength=26 # a ULID
+	ActivationId  string `protobuf:"bytes,8,opt,name=activation_id,json=activationId,proto3" json:"activation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ActorStatus) Reset() {
@@ -2235,6 +2245,13 @@ func (x *ActorStatus) GetLastAssignedGeneration() int32 {
 	return 0
 }
 
+func (x *ActorStatus) GetActivationId() string {
+	if x != nil {
+		return x.ActivationId
+	}
+	return ""
+}
+
 // ActorCrash describes the failure that moved an Actor to CRASHED.
 type ActorCrash struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -2246,7 +2263,13 @@ type ActorCrash struct {
 	// crash_time is when the Actor entered CRASHED.
 	//
 	// +k8s:optional
-	CrashTime     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=crash_time,json=crashTime,proto3" json:"crash_time,omitempty"`
+	CrashTime *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=crash_time,json=crashTime,proto3" json:"crash_time,omitempty"`
+	// activation_id is the ActorStatus.activation_id the Actor held when it
+	// crashed. Empty if it crashed with no activation.
+	//
+	// +k8s:optional
+	// +k8s:maxLength=26 # a ULID
+	ActivationId  string `protobuf:"bytes,3,opt,name=activation_id,json=activationId,proto3" json:"activation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2293,6 +2316,13 @@ func (x *ActorCrash) GetCrashTime() *timestamppb.Timestamp {
 		return x.CrashTime
 	}
 	return nil
+}
+
+func (x *ActorCrash) GetActivationId() string {
+	if x != nil {
+		return x.ActivationId
+	}
+	return ""
 }
 
 // WorkerAssignment points at the Worker currently hosting an Actor.
@@ -10076,7 +10106,7 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\tactor_jwt\x18\x04 \x01(\v2#.substrate.ateapi.v1.ActorJwtSourceR\bactorJwt\"]\n" +
 	"\x0eActorJwtSource\x12\x1c\n" +
 	"\taudiences\x18\x01 \x03(\tR\taudiences\x12-\n" +
-	"\x12expiration_seconds\x18\x02 \x01(\x03R\x11expirationSeconds\"\xbc\x03\n" +
+	"\x12expiration_seconds\x18\x02 \x01(\x03R\x11expirationSeconds\"\xe1\x03\n" +
 	"\vActorStatus\x125\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x1f.substrate.ateapi.v1.ActorStateR\x05state\x12R\n" +
 	"\x11worker_assignment\x18\x02 \x01(\v2%.substrate.ateapi.v1.WorkerAssignmentR\x10workerAssignment\x12O\n" +
@@ -10084,12 +10114,14 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x05crash\x18\x04 \x01(\v2\x1f.substrate.ateapi.v1.ActorCrashR\x05crash\x12#\n" +
 	"\rassigned_node\x18\x05 \x01(\tR\fassignedNode\x12;\n" +
 	"\tsnapshots\x18\x06 \x03(\v2\x1d.substrate.ateapi.v1.SnapshotR\tsnapshots\x128\n" +
-	"\x18last_assigned_generation\x18\a \x01(\x05R\x16lastAssignedGeneration\"a\n" +
+	"\x18last_assigned_generation\x18\a \x01(\x05R\x16lastAssignedGeneration\x12#\n" +
+	"\ractivation_id\x18\b \x01(\tR\factivationId\"\x86\x01\n" +
 	"\n" +
 	"ActorCrash\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x129\n" +
 	"\n" +
-	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xbe\x03\n" +
+	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\x12#\n" +
+	"\ractivation_id\x18\x03 \x01(\tR\factivationId\"\xbe\x03\n" +
 	"\x10WorkerAssignment\x126\n" +
 	"\x06worker\x18\x06 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x06worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +

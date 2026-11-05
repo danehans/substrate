@@ -143,6 +143,7 @@ func seedFinalizeActor(t *testing.T, ctx context.Context, persistence store.Inte
 			State:                  ateapi.ActorState_ACTOR_STATE_RESUMING,
 			AssignedNode:           "node-1",
 			LastAssignedGeneration: 1,
+			ActivationId:           testActivationID,
 			WorkerAssignment: &ateapi.WorkerAssignment{
 				Worker:       &ateapi.ObjectRef{Name: workerName},
 				WorkerPodIps: []string{"10.0.0.1"},
@@ -155,6 +156,34 @@ func seedFinalizeActor(t *testing.T, ctx context.Context, persistence store.Inte
 	})
 }
 
+// testActivationID is the activation seedFinalizeActor records.
+const testActivationID = "01JDQ5W2R3V6Z8B4N7K9M1P0XA"
+
+// A restore sent under an activation the Actor no longer holds does not
+// commit RUNNING.
+func TestFinalizeRunning_RefusesOtherActivation(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	seedFinalizeActor(t, ctx, persistence, 1, []string{"10.0.0.1"})
+	w := &ActorWorkflow{store: persistence}
+	ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+
+	_, err := w.finalizeRunning(ctx, ref, "01JDQ5W2R3V6Z8B4N7K9M1P0XB", 1)
+	if got := apierror.Code(err); got != codes.Aborted {
+		t.Fatalf("finalizeRunning() = %v (err %v), want Aborted", got, err)
+	}
+	actor, err := persistence.GetActor(ctx, ref)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got := actor.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RESUMING {
+		t.Errorf("state = %v, want RESUMING", got)
+	}
+	if got := actor.GetStatus().GetActivationId(); got != testActivationID {
+		t.Errorf("activation_id = %q, want %q", got, testActivationID)
+	}
+}
+
 // TestFinalizeRunning_CommitsRunning verifies the last step of a resume moves
 // the actor out of RESUMING against a freshly read version, and keeps the
 // locality of the local snapshot it restored from: resume does not delete the
@@ -165,7 +194,7 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 	seedFinalizeActor(t, ctx, persistence, 1, []string{"10.0.0.1"})
 	w := &ActorWorkflow{store: persistence}
 
-	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 1)
+	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, testActivationID, 1)
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
@@ -186,7 +215,7 @@ func TestFinalizeRunning_StampsReportedEpochAndIPs(t *testing.T) {
 	seedFinalizeActor(t, ctx, persistence, 2, []string{"10.0.0.2"})
 	w := &ActorWorkflow{store: persistence}
 
-	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 2)
+	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, testActivationID, 2)
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
@@ -216,7 +245,7 @@ func TestFinalizeRunning_ReplacedWorkerProcess(t *testing.T) {
 			seedFinalizeActor(t, ctx, persistence, 2, []string{"10.0.0.2"})
 			w := &ActorWorkflow{store: persistence}
 
-			_, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, tc.reported)
+			_, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, testActivationID, tc.reported)
 			if got := apierror.Code(err); got != tc.want {
 				t.Fatalf("finalizeRunning() = %v (err %v), want %v", got, err, tc.want)
 			}
@@ -248,7 +277,7 @@ func TestFinalizeRunning_UnrecordableUploadStillRuns(t *testing.T) {
 	})
 	w := &ActorWorkflow{store: persistence}
 
-	got, err := w.finalizeRunning(ctx, ref, 1)
+	got, err := w.finalizeRunning(ctx, ref, testActivationID, 1)
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}

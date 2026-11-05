@@ -3290,6 +3290,8 @@ func TestResumeActor(t *testing.T) {
 			State:                  ateapi.ActorState_ACTOR_STATE_RUNNING,
 			AssignedNode:           "node1",
 			LastAssignedGeneration: 1,
+			// The activation the Restore was sent with.
+			ActivationId: tc.fakeAtelet.lastRestoreRequest().GetActivationId(),
 			Snapshots: []*ateapi.Snapshot{
 				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
 			},

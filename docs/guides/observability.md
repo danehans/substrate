@@ -20,6 +20,7 @@ To make underlying infrastructure transitions transparent, Agent Substrate estab
 * `ate.actor.uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
 * `ate.template.name`: The name of the actor's ActorTemplate (e.g., `counter`).
 * `ate.template.atespace`: The atespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
+* `ate.actor.activation`: The ULID of the actor's current activation, `status.activation_id`. It is set from the resume that assigned the actor a worker until the write that clears the assignment. ateapi's spans and lifecycle events carry it while the actor has one, and so do the ateworker records that take the attribution of a Run or Restore: the actor's container logs and the ateworker's own logs about the hosted actor. atelet's timing breakdowns, the ateworker's Checkpoint and Terminate records and `ate.actor.usage_sampled` do not carry it yet.
 * `ate.actor.container.name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container. Absent on the synthetic lifecycle records (`Actor starting`, `Actor restored`, …): those are about the actor, so no container produced them. The `runsc create`, `start`, and `restore` CLI output for the sandbox is wrapped under `_sandbox`. This does not capture sentry or gofer output, which runsc directs to `/dev/null` when debug logging is disabled.
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and head-sampled request tracing (10% by default, 1% at the router), with roadmap plans to fully integrate actor-level correlation.
@@ -147,7 +148,7 @@ An actor's **own** lines carry trace context only if the actor emits these field
 
 ### Actor-Attributed Component Logs
 
-A component's own `slog` output can also be about a specific actor. Those records take the identity keys from [`internal/ateattr`](../../internal/ateattr) too, flat at the top level rather than inside a label group: a component writes no envelope, so a collector lifts the keys straight onto the log record's attributes. `ateattr.ActorLogAttrs` and `ateattr.ActorLogLabels` return the same five keys for this reason, and a test holds them together. Filtering on `ate.actor.uid` therefore finds a component record and an actor's own output alike.
+A component's own `slog` output can also be about a specific actor. Those records take the identity keys from [`internal/ateattr`](../../internal/ateattr) too, flat at the top level rather than inside a label group: a component writes no envelope, so a collector lifts the keys straight onto the log record's attributes. `ateattr.ActorLogAttrs` and `ateattr.ActorLogLabels` return the same five keys, plus `ate.actor.activation` when the actor has one, for this reason, and a test holds them together. Filtering on `ate.actor.uid` therefore finds a component record and an actor's own output alike.
 
 atelet's `Restore timing breakdown` and `Checkpoint timing breakdown` are the unsampled per-actor latency records Substrate produces. Each is emitted once per operation, whether it succeeded or failed; a failed one also carries `error.type` (the gRPC code, `DeadlineExceeded` and `Canceled` for context errors), so a reader can leave it out of a latency distribution:
 
@@ -222,7 +223,7 @@ Three `event.name` values, which is the OTLP LogRecord's own field rather than a
 
 | `event.name` | Body | Severity | Attributes |
 |---|---|---|---|
-| `ate.actor.state_changed` | `Actor state changed` | 9 | the five identity keys, `ate.actor.operation.name`, `ate.actor.state` |
+| `ate.actor.state_changed` | `Actor state changed` | 9 | the five identity keys, `ate.actor.operation.name`, `ate.actor.state`, and `ate.actor.activation` while the actor has one |
 | `ate.actor.crashed` | `Actor crashed` | 17 | the same keys |
 | `ate.actor.usage_sampled` | `Actor usage sampled` | 9 | the five identity keys, `ate.workerpool.*`, `ate.sandbox.class`, `ate.stats.*`, `ate.actor.epoch` |
 
