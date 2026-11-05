@@ -325,7 +325,7 @@ Rules:
 - If the resource does not exist: return `NOT_FOUND`.
 - `version` and `uid` preconditions are honored via a `DeleteOptions` field (see section #7). Both are optional; the zero value skips the check.
 - Further non-resource "control" fields (e.g. dry-run) belong in `DeleteOptions`, not as loose top-level fields on the request.
-- `DeleteOptions` **must** have only the fields defined above. This list may be extended in the future with options such as `dry_run` or `force`.
+- `DeleteOptions` **must** have only the fields defined above, plus `expected_activation`, which only `DeleteActor` accepts. This list may be extended in the future with options such as `dry_run` or `force`.
 
 
 TODO: Delete operations are synchronous, but might revisit this and introduce the concept of soft-deletion to 

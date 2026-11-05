@@ -206,8 +206,8 @@ func (s *ServiceImpl) UpdateWorker(ctx context.Context, name string, preconditio
 	})
 }
 
-// BindActorToWorker and UpdateActorAndRelease validate the Actor they write as
-// UpdateActor does. They return the store's errors unmapped, so callers can
+// BindActorToWorker, UpdateActorAndRelease and their receipt variants validate
+// the Actor they write as UpdateActor does. They return the store's errors unmapped, so callers can
 // tell a missing Worker from a missing Actor and retry a version conflict.
 func (s *ServiceImpl) BindActorToWorker(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	return s.store.BindActorToWorker(ctx, workerName, assignment, admit, actorRef, precondition, s.validatedActorMutation(ctx, mutate))
@@ -215,6 +215,14 @@ func (s *ServiceImpl) BindActorToWorker(ctx context.Context, workerName string, 
 
 func (s *ServiceImpl) UpdateActorAndRelease(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	return s.store.UpdateActorAndRelease(ctx, actorRef, precondition, s.validatedActorMutation(ctx, mutate))
+}
+
+func (s *ServiceImpl) BindActorToWorkerWithReceipt(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, receipt func(*ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.LifecycleReceipt, error) {
+	return s.store.BindActorToWorkerWithReceipt(ctx, workerName, assignment, admit, actorRef, precondition, s.validatedActorMutation(ctx, mutate), receipt, create)
+}
+
+func (s *ServiceImpl) UpdateActorAndReleaseWithReceipt(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, receipt func(*ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.LifecycleReceipt, error) {
+	return s.store.UpdateActorAndReleaseWithReceipt(ctx, actorRef, precondition, s.validatedActorMutation(ctx, mutate), receipt, create)
 }
 
 func (s *ServiceImpl) GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapi.ActorAssignment, error) {
@@ -231,7 +239,11 @@ func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapi.DeleteWorkerR
 	}
 	// The delete releases the Actor bound to this Worker before removing the
 	// record, so it is a workflow rather than a single store call.
-	return s.workerWorkflow.DeleteWorker(ctx, req.GetWorker().GetName(), toDeletePreconditions(req.GetOptions()))
+	precondition, err := toDeletePreconditions(req.GetOptions())
+	if err != nil {
+		return nil, err
+	}
+	return s.workerWorkflow.DeleteWorker(ctx, req.GetWorker().GetName(), precondition)
 }
 
 func (s *ServiceImpl) MarkWorkerForDeletion(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(*ateapi.Worker) error) (*ateapi.Worker, error) {

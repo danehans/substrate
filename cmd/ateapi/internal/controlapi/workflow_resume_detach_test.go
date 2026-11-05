@@ -529,7 +529,7 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 			addAteletOnNode(t, w, "node-2")
 			atelet.detachState = detachedState(snap)
 
-			got, resumed, err := w.ResumeActor(ctx, actorRef)
+			got, resumed, _, err := w.ResumeActor(ctx, actorRef, lifecycleConditions{})
 			if err != nil {
 				t.Fatalf("ResumeActor: %v", err)
 			}
@@ -628,7 +628,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 				atelet.restoreErr = apierror.NotFound("snapshot has no usable local copy and no uploaded copy")
 			}
 
-			got, resumed, err := w.ResumeActor(ctx, actorRef)
+			got, resumed, _, err := w.ResumeActor(ctx, actorRef, lifecycleConditions{})
 			restore, _ := atelet.requests()
 			if restore.GetWorkerPodUid() != worker.GetWorkerPodUid() || restore.GetSnapshot().GetSnapshotUuid() != pending.GetUuid() {
 				t.Fatalf("Restore = (worker %q, snapshot %q), want (%q, %q)", restore.GetWorkerPodUid(), restore.GetSnapshot().GetSnapshotUuid(), worker.GetWorkerPodUid(), pending.GetUuid())
@@ -682,7 +682,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 			atelet.mu.Lock()
 			atelet.restoreErr = nil
 			atelet.mu.Unlock()
-			if _, _, err := w.ResumeActor(ctx, actorRef); err != nil {
+			if _, _, _, err := w.ResumeActor(ctx, actorRef, lifecycleConditions{}); err != nil {
 				t.Fatalf("second ResumeActor: %v", err)
 			}
 			if restore, _ := atelet.requests(); restore.GetSnapshot().GetSnapshotUuid() != durable.GetUuid() {

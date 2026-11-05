@@ -761,6 +761,7 @@ Because the guards are required and only a read supplies them, an update is alwa
 Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
+    *   `expected_uid`, `expected_activation`, `request_id`: (Optional) see [Conditional suspend and resume](#conditional-suspend-and-resume).
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment` and the activation in `status.activation_id`). Each resume that assigns a worker mints a new activation ID, a ULID. A retried resume of an actor left `ACTOR_STATE_RESUMING` gets a new one too, so no ID is sent to atelet twice. The ID is cleared with the worker assignment, and a crash records it in `status.crash.activation_id`.
 *   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`. When a suspended actor's node is deleted, resume restores its local snapshot on another node from the snapshot's upload, even if atelet never reported the upload complete. Resume does this once another node has room. If atelet finds no upload, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot. Revert deletes an upload that was never reported complete, so a snapshot is lost if its restore fails for another reason, or if the actor is reverted before it resumes.
 
@@ -769,10 +770,31 @@ Hibernate a running actor, capturing its current RAM and disk state into a snaps
 *   **Request:** `SuspendActorRequest`
     *   `actor`: `ObjectRef` of the actor to suspend.
     *   `options.mode`: (Optional) `DURABILITY_MODE_SYNCHRONOUS` returns once the snapshot is `COMPLETED` in object storage. `DURABILITY_MODE_ASYNCHRONOUS` returns once the snapshot is captured on the worker's node, and atelet uploads it in the background. Unset runs an asynchronous suspend.
+    *   `expected_uid`, `expected_activation`, `request_id`: (Optional) see [Conditional suspend and resume](#conditional-suspend-and-resume).
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.snapshots`.
 *   Called on an actor that is already `ACTOR_STATE_SUSPENDED`, it returns the actor as it is, in either mode. After an asynchronous suspend, atelet uploads the snapshot in the background, so `status.snapshots` may still show a `PENDING` `durableSnapshot`.
 *   A snapshot generation conflict returns `ABORTED` without crashing the actor. The actor can remain `ACTOR_STATE_SUSPENDING`, with its worker assignment and previous completed snapshot kept for recovery. Read the actor's latest state before retrying; repeating a stale request cannot resolve a persistent disagreement with atelet.
 *   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended. After an asynchronous suspend, `CreateTag` first has atelet upload the snapshot if it has not already, so the call can take as long as that upload. If the upload fails, so does `CreateTag`, and the actor is left as it was.
+
+#### Conditional suspend and resume
+
+`SuspendActor` and `ResumeActor` take three optional fields. A caller that sets none of them gets the behavior above.
+
+*   `expected_uid` acts only on the actor with this uid, not a later one created under the same name.
+*   `expected_activation` acts only while `status.activation_id` is this one, that is, the run the caller observed. A `SUSPENDED` actor holds no activation, so it never matches.
+*   `request_id` makes the call idempotent and returns a `LifecycleReceipt`.
+
+ateapi checks `expected_uid` and `expected_activation` under the actor's lease, before the workflow writes anything, and again in the write that marks the actor `SUSPENDING` or `RESUMING`. A suspend checks them before the checkpoint. A mismatch returns `FAILED_PRECONDITION` and changes nothing.
+
+With a `request_id`, ateapi stores a receipt in the same transaction as the write that commits the transition. A call that finds the actor already in the target state stores one too, with `transitioned` false. The receipt records the actor's uid, the activation the call stopped or started, the resulting state, and for a suspend the durability mode and whether the snapshot was durable at that moment. An asynchronous suspend's receipt keeps `snapshot_durable` false after the upload finishes; read the actor for its current state.
+
+A later call with the same `request_id` on the same actor name returns the stored receipt and no `actor`, and does nothing else. This holds after the actor moved to another activation, was suspended or resumed again, or was deleted and replaced. A call that reuses the `request_id` with a different operation, `expected_uid`, `expected_activation` or durability mode returns `ALREADY_EXISTS`.
+
+A receipt in `ACTOR_STATE_SUSPENDING` or `ACTOR_STATE_RESUMING` records a call that committed its transition and did not finish, for example because the checkpoint failed. Its retry finishes the transition while the actor is still in that state under the same uid and activation. Otherwise it returns the receipt as it is.
+
+Receipts are kept for 24 hours after they are created, including after the actor is deleted. Deleting the atespace deletes its receipts.
+
+Every ate-api-server replica must support these fields before a client sends them. A replica that predates them ignores them and runs the call unconditionally.
 
 #### Snapshot lifetime
 
@@ -801,7 +823,7 @@ Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE
 Removes an actor in any state from the registry and cleans up associated resources, terminating active workloads, detaching volumes, and releasing worker allocations.
 *   **Request:** `DeleteActorRequest`
     *   `actor`: `ObjectRef` of the actor to delete.
-    *   `options`: (Optional) `DeleteOptions`. `uid` and `version` are preconditions checked against the actor as the caller last read it: a mismatch returns `ABORTED`, an omitted guard is skipped. They are checked before the workflow starts, so a guarded delete that fails part-way leaves the actor `ACTOR_STATE_DELETING` at a higher version. Retry it with the `uid` guard alone, or re-read first.
+    *   `options`: (Optional) `DeleteOptions`. `uid` and `version` are preconditions checked against the actor as the caller last read it: a mismatch returns `ABORTED`, an omitted guard is skipped. They are checked before the workflow starts, so a guarded delete that fails part-way leaves the actor `ACTOR_STATE_DELETING` at a higher version. Retry it with the `uid` guard alone, or re-read first. `expected_activation` deletes the actor only while `status.activation_id` is this one; a mismatch returns `FAILED_PRECONDITION` and changes nothing. It is checked in the write that marks the actor `ACTOR_STATE_DELETING`, so an actor already deleting is not checked. Other deletes reject `expected_activation` with `INVALID_ARGUMENT`.
 *   **Response:** the deleted `Actor`, as it was immediately before removal.
 *   Deleting an actor also deletes the external snapshot it owns, along with one an interrupted suspend left behind. Snapshots it only borrows from a tag are left alone, and its tags are unaffected — they hold their own copies.
 

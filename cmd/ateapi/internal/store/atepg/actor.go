@@ -93,13 +93,29 @@ func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resourc
 // updateActor applies mutate to the stored actor through q, which is the pool
 // or a transaction the write must commit with.
 func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
+	dbActor, err := getActorRow(ctx, q, actorRef, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
+		return nil, err
+	}
+	return writeActorRow(ctx, q, actorRef, dbActor, mutate, markForDeletion)
+}
+
+// getActorRow reads the stored actor and checks that its uid and version
+// columns match its metadata. forUpdate locks the row until the transaction
+// q runs in ends.
+func getActorRow(ctx context.Context, q querier, actorRef resources.ActorRef, forUpdate bool) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
+	query := `SELECT uid, version, proto FROM actors WHERE atespace = $1 AND name = $2`
+	if forUpdate {
+		query += ` FOR UPDATE`
+	}
 	var currentUID string
 	var currentVersion int64
 	var currentBytes []byte
-	if err := q.QueryRow(ctx, `
-			SELECT uid, version, proto FROM actors
-			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
+	if err := q.QueryRow(ctx, query, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
@@ -113,9 +129,14 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 	if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
 		return nil, err
 	}
-	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
-		return nil, err
-	}
+	return dbActor, nil
+}
+
+// writeActorRow applies mutate to dbActor, as getActorRow read it, and writes
+// it back only if the stored row is still at the version read.
+func writeActorRow(ctx context.Context, q querier, actorRef resources.ActorRef, dbActor *ateapi.Actor, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
+	atespace, name := actorRef.Atespace, actorRef.Name
+	currentUID, currentVersion := dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion()
 	oldMeta := proto.CloneOf(dbActor.Metadata)
 	if mutate != nil {
 		if err := mutate(dbActor); err != nil {

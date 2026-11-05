@@ -126,7 +126,7 @@ func TestResumeActor_Activation(t *testing.T) {
 			fake := &capturingAtelet{}
 			w.dialer = newNodeAteletDialer(t, fake)
 
-			got, resumed, err := w.ResumeActor(ctx, actorRef)
+			got, resumed, _, err := w.ResumeActor(ctx, actorRef, lifecycleConditions{})
 			if err != nil || !resumed {
 				t.Fatalf("ResumeActor() = resumed %v, err %v", resumed, err)
 			}

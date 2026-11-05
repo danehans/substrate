@@ -205,7 +205,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			})
 			seedWireWorker(t, ctx, st, assignmentOf(running))
 			wire, atelet := newWireCaptureWorkflow(t, st)
-			suspended, err := wire.SuspendActor(ctx, actorRef, suspendSync)
+			suspended, _, err := wire.SuspendActor(ctx, actorRef, suspendSync, lifecycleConditions{})
 			if err != nil {
 				t.Fatalf("SuspendActor after revert: %v", err)
 			}

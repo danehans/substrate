@@ -90,7 +90,7 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 				}
 			}
 
-			deleted, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{})
+			deleted, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}, "")
 			if err != nil {
 				t.Fatalf("DeleteActor failed: %v", err)
 			}
@@ -225,7 +225,7 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 					_, err = w.RevertActor(ctx, actorRef)
 				} else {
 					wantState = ateapi.ActorState_ACTOR_STATE_DELETING
-					_, err = w.DeleteActor(ctx, actorRef, store.DeletePreconditions{})
+					_, err = w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}, "")
 				}
 				switch {
 				case tc.wantDetachErr:
@@ -291,7 +291,7 @@ func TestEnsureMarkedDeleting_AllStates(t *testing.T) {
 				t.Fatalf("get seeded actor: %v", err)
 			}
 
-			updated, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{Version: actor.GetMetadata().GetVersion()})
+			updated, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{Version: actor.GetMetadata().GetVersion()}, "")
 			if err != nil {
 				t.Fatalf("ensureMarkedDeleting failed: %v", err)
 			}
@@ -302,7 +302,7 @@ func TestEnsureMarkedDeleting_AllStates(t *testing.T) {
 				t.Error("ensureMarkedDeleting left delete_time unset")
 			}
 
-			again, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{})
+			again, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{}, "")
 			if err != nil {
 				t.Fatalf("second ensureMarkedDeleting failed: %v", err)
 			}
@@ -477,7 +477,7 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 		}
 	})
 
-	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}, ""); err != nil {
 		t.Fatalf("DeleteActor: %v", err)
 	}
 	if left := objects.Prefix(t, inFlight.OwnerPrefix()); len(left) != 0 {
@@ -605,7 +605,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				objects.PutSnapshot(t, fresh, "manifest.json")
 				return apierror.Unavailable("worker pod is gone")
 			}
-			if _, err := actorWorkflow.SuspendActor(ctx, actorRef, suspendSync); apierror.Code(err) != codes.Unavailable {
+			if _, _, err := actorWorkflow.SuspendActor(ctx, actorRef, suspendSync, lifecycleConditions{}); apierror.Code(err) != codes.Unavailable {
 				t.Fatalf("SuspendActor err = %v, want Unavailable from the failed checkpoint", err)
 			}
 			// SuspendActor failed mid-checkpoint and released the actor's lease,
@@ -623,7 +623,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 			if got := stored.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
 				t.Fatalf("state = %v, want CRASHED", got)
 			}
-			if _, err := actorWorkflow.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+			if _, err := actorWorkflow.DeleteActor(ctx, actorRef, store.DeletePreconditions{}, ""); err != nil {
 				t.Fatalf("DeleteActor: %v", err)
 			}
 			if left := objects.Prefix(t, fresh.OwnerPrefix()); len(left) != 0 {
@@ -663,7 +663,7 @@ func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
 	guards := store.DeletePreconditions{UID: observed.GetMetadata().GetUid(), Version: observed.GetMetadata().GetVersion()}
 
 	objects.OnDelete = func(string, string) error { return errObjectStore }
-	if _, err := w.DeleteActor(ctx, actorRef, guards); !isObjectStoreErr(err) {
+	if _, err := w.DeleteActor(ctx, actorRef, guards, ""); !isObjectStoreErr(err) {
 		t.Fatalf("DeleteActor = %v, want it to report %v", err, errObjectStore)
 	}
 	admitted, err := persistence.GetActor(ctx, actorRef)
@@ -677,7 +677,7 @@ func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
 		t.Fatalf("state after the failure = %v, want DELETING", got)
 	}
 
-	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{UID: guards.UID}); !isObjectStoreErr(err) {
+	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{UID: guards.UID}, ""); !isObjectStoreErr(err) {
 		t.Fatalf("retried DeleteActor = %v, want it to report %v", err, errObjectStore)
 	}
 	retried, err := persistence.GetActor(ctx, actorRef)
@@ -690,17 +690,17 @@ func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
 
 	objects.OnDelete = nil
 	// The first attempt spent the version guard. The uid guard still holds.
-	if _, err := w.DeleteActor(ctx, actorRef, guards); apierror.Code(err) != codes.Aborted {
+	if _, err := w.DeleteActor(ctx, actorRef, guards, ""); apierror.Code(err) != codes.Aborted {
 		t.Fatalf("retry with the original version = %v, want ABORTED", err)
 	}
-	deleted, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{UID: guards.UID})
+	deleted, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{UID: guards.UID}, "")
 	if err != nil {
 		t.Fatalf("retry with the uid alone: %v", err)
 	}
 	if !deleted.GetMetadata().GetDeleteTime().AsTime().Equal(admitted.GetMetadata().GetDeleteTime().AsTime()) {
 		t.Errorf("the retry re-stamped delete_time: %v, want %v", deleted.GetMetadata().GetDeleteTime().AsTime(), admitted.GetMetadata().GetDeleteTime().AsTime())
 	}
-	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); apierror.Code(err) != codes.NotFound {
+	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}, ""); apierror.Code(err) != codes.NotFound {
 		t.Errorf("DeleteActor after the row is gone = %v, want NOT_FOUND", err)
 	}
 }
