@@ -23,6 +23,9 @@ tuples:
   - user: user:frank
     relation: viewer
     object: global:root
+  - user: user:grace
+    relation: hold_manager
+    object: global:root
 
   # Atespace Scope (space-1 linked to global:root)
   - user: global:root
@@ -36,6 +39,9 @@ tuples:
     object: atespace:space-1
   - user: user:dave
     relation: viewer
+    object: atespace:space-1
+  - user: user:heidi
+    relation: hold_manager
     object: atespace:space-1
 
   # Templates and tags
@@ -331,6 +337,65 @@ tests:
         assertions:
           can_suspend: true
           can_revert: true
+
+  - name: 4a. Actor Holds (not granted by editor)
+    check:
+      - user: user:carol # Global owner
+        object: actor:runner-1
+        assertions:
+          can_hold: true
+          can_release_hold: true
+      - user: user:alice # Atespace owner
+        object: actor:runner-1
+        assertions:
+          can_hold: true
+          can_release_hold: true
+      - user: user:grace # Global hold manager
+        object: actor:runner-1
+        assertions:
+          can_hold: true
+          can_release_hold: true
+          can_get: true
+          can_update: false
+          can_resume: false
+          can_suspend: false
+          can_delete: false
+      - user: user:heidi # Atespace hold manager
+        object: actor:runner-1
+        assertions:
+          can_hold: true
+          can_release_hold: true
+          can_get: true
+          can_update: false
+          can_resume: false
+          can_suspend: false
+          can_delete: false
+      - user: user:bob # Editor
+        object: actor:runner-1
+        assertions:
+          can_hold: false
+          can_release_hold: false
+      - user: user:dave # Viewer
+        object: actor:runner-1
+        assertions:
+          can_hold: false
+          can_release_hold: false
+      - user: user:sa-runner-1 # Workload identity with suspend and revert
+        object: actor:runner-1
+        assertions:
+          can_hold: false
+          can_release_hold: false
+      - user: user:sys-router
+        object: actor:runner-1
+        assertions:
+          can_hold: false
+          can_release_hold: false
+      - user: user:heidi
+        object: atespace:space-1
+        assertions:
+          editor: false
+          viewer: true
+          can_create_actor: false
 
   - name: 5. Node Restriction (can_mint_worker_actor_credential)
     check:

@@ -100,6 +100,25 @@ const OTLPRelayKey = attribute.Key("ate.otlp.relay")
 // actor identity, which no metric may carry.
 const ActorStateKey = attribute.Key("ate.actor.state")
 
+// Keys of the ate.actor.hold_changed event. Logs only: they are recorded beside
+// actor identity, and every value but the action comes from a request or its
+// caller.
+const (
+	ActorHoldActionKey           = attribute.Key("ate.actor.hold.action")
+	ActorHoldHolderKey           = attribute.Key("ate.actor.hold.holder")
+	ActorHoldCallerKey           = attribute.Key("ate.actor.hold.caller")
+	ActorHoldReasonKey           = attribute.Key("ate.actor.hold.reason")
+	ActorHoldIncidentIDKey       = attribute.Key("ate.actor.hold.incident_id")
+	ActorHoldRequestIDKey        = attribute.Key("ate.actor.hold.request_id")
+	ActorHoldReleaseRequestIDKey = attribute.Key("ate.actor.hold.release_request_id")
+)
+
+// Values for ActorHoldActionKey.
+const (
+	HoldActionPlaced   = "placed"
+	HoldActionReleased = "released"
+)
+
 // Values for ActorStateKey, mirroring ateapi.ActorState with the
 // ACTOR_STATE_ prefix dropped so the two cannot fork. ActorStateDeleted is the
 // exception and has no enum counterpart: the record is gone, so no stored state
