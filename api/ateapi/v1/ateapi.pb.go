@@ -8502,7 +8502,17 @@ type MintWorkerActorCertificateRequest struct {
 	//
 	// +k8s:required
 	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
-	Worker        *ObjectRef `protobuf:"bytes,4,opt,name=worker,proto3" json:"worker,omitempty"`
+	Worker *ObjectRef `protobuf:"bytes,4,opt,name=worker,proto3" json:"worker,omitempty"`
+	// The activation the requesting Worker was given on Run or Restore, from
+	// ActorStatus.activation_id. The request is refused with ABORTED unless it
+	// equals the Actor's current activation_id, so a Worker cannot mint for an
+	// earlier or a later activation. Empty matches only an Actor with no
+	// activation. The issued certificate's ActorIdentity extension carries it
+	// as ActivationId.
+	//
+	// +k8s:optional
+	// +k8s:maxLength=26 # a ULID
+	ActivationId  string `protobuf:"bytes,5,opt,name=activation_id,json=activationId,proto3" json:"activation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8563,6 +8573,13 @@ func (x *MintWorkerActorCertificateRequest) GetWorker() *ObjectRef {
 		return x.Worker
 	}
 	return nil
+}
+
+func (x *MintWorkerActorCertificateRequest) GetActivationId() string {
+	if x != nil {
+		return x.ActivationId
+	}
+	return ""
 }
 
 // Response message for MintWorkerActorCertificate.
@@ -10437,12 +10454,13 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x05epoch\x18\x02 \x01(\x03R\x05epoch\x12P\n" +
 	"\x0fsandbox_classes\x18\x03 \x03(\v2'.substrate.ateapi.v1.WorkerSandboxClassR\x0esandboxClasses\"W\n" +
 	" SetWorkerSandboxRuntimesResponse\x123\n" +
-	"\x06worker\x18\x01 \x01(\v2\x1b.substrate.ateapi.v1.WorkerR\x06worker\"\xee\x01\n" +
+	"\x06worker\x18\x01 \x01(\v2\x1b.substrate.ateapi.v1.WorkerR\x06worker\"\x93\x02\n" +
 	"!MintWorkerActorCertificateRequest\x124\n" +
 	"\x05actor\x18\x01 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\x02 \x01(\tR\bactorUid\x12>\n" +
 	"\x1bcertificate_signing_request\x18\x03 \x01(\fR\x19certificateSigningRequest\x126\n" +
-	"\x06worker\x18\x04 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x06worker\"S\n" +
+	"\x06worker\x18\x04 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x06worker\x12#\n" +
+	"\ractivation_id\x18\x05 \x01(\tR\factivationId\"S\n" +
 	"\"MintWorkerActorCertificateResponse\x12-\n" +
 	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\x8c\x01\n" +
 	"\x19MintWorkerActorJwtRequest\x124\n" +
