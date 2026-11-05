@@ -263,7 +263,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 
 	storedActor, err := w.store.UpdateActorAndRelease(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
-		toUpdate.Status.WorkerAssignment = nil
+		clearWorkerAssignment(toUpdate.Status)
 		toUpdate.Status.AssignedNode = ""
 		// We revert back to the latest durable snapshot, so all local snapshots
 		// and pending durable snapshots are removed.

@@ -87,6 +87,23 @@ func TestActorAttributes(t *testing.T) {
 			},
 		},
 		{
+			name: "actor with an activation",
+			actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "support-agent-42", Uid: "uid-abc", Version: 7},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "ate-agents", Name: "support-agent"},
+				Status:        &ateapi.ActorStatus{ActivationId: "01JDQ5W2R3V6Z8B4N7K9M1P0XA"},
+			},
+			want: map[attribute.Key]any{
+				AtespaceKey:         "team-a",
+				ActorNameKey:        "support-agent-42",
+				ActorUIDKey:         "uid-abc",
+				TemplateNameKey:     "support-agent",
+				TemplateAtespaceKey: "ate-agents",
+				ActorVersionKey:     int64(7),
+				ActorActivationKey:  "01JDQ5W2R3V6Z8B4N7K9M1P0XA",
+			},
+		},
+		{
 			name:  "nil actor yields zero values, not a panic",
 			actor: nil,
 			want: map[attribute.Key]any{
@@ -239,6 +256,26 @@ func TestActorLogLabels(t *testing.T) {
 			},
 		},
 		{
+			name: "an activation is labeled",
+			attribution: resources.ActorAttribution{
+				Ref:              attribution.Ref,
+				UID:              attribution.UID,
+				TemplateAtespace: attribution.TemplateAtespace,
+				TemplateName:     attribution.TemplateName,
+				ActivationID:     "01JDQ5W2R3V6Z8B4N7K9M1P0XA",
+			},
+			containerName: containerName,
+			want: map[string]string{
+				"ate.atespace":             "team-a",
+				"ate.actor.name":           "support-agent-42",
+				"ate.actor.uid":            "uid-abc",
+				"ate.actor.container.name": containerName,
+				"ate.actor.activation":     "01JDQ5W2R3V6Z8B4N7K9M1P0XA",
+				"ate.template.atespace":    "ate-agents",
+				"ate.template.name":        "support-agent",
+			},
+		},
+		{
 			name:          "zero attribution still produces the five identity keys",
 			attribution:   resources.ActorAttribution{},
 			containerName: "",
@@ -292,6 +329,22 @@ func TestActorLogAttrs(t *testing.T) {
 			},
 		},
 		{
+			name: "an activation is attributed",
+			attribution: resources.ActorAttribution{
+				Ref:          resources.ActorRef{Atespace: "team-a", Name: "support-agent-42"},
+				UID:          "uid-abc",
+				ActivationID: "01JDQ5W2R3V6Z8B4N7K9M1P0XA",
+			},
+			want: map[string]string{
+				"ate.atespace":          "team-a",
+				"ate.actor.name":        "support-agent-42",
+				"ate.actor.uid":         "uid-abc",
+				"ate.template.atespace": "",
+				"ate.template.name":     "",
+				"ate.actor.activation":  "01JDQ5W2R3V6Z8B4N7K9M1P0XA",
+			},
+		},
+		{
 			name:        "zero attribution still produces the five identity keys",
 			attribution: resources.ActorAttribution{},
 			want: map[string]string{
@@ -338,6 +391,7 @@ func TestActorLogAttrsMatchesActorLogLabels(t *testing.T) {
 		UID:              "uid-abc",
 		TemplateAtespace: "ate-agents",
 		TemplateName:     "support-agent",
+		ActivationID:     "01JDQ5W2R3V6Z8B4N7K9M1P0XA",
 	}
 
 	// The empty container name is the lifecycle-record form: ActorLogAttrs has no

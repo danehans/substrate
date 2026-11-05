@@ -31,6 +31,7 @@ require (
 	github.com/klauspost/compress v1.19.1
 	github.com/moby/sys/user v0.4.1
 	github.com/myzhan/boomer v1.6.1-0.20250711115830-8a2c7ce4c7b1
+	github.com/oklog/ulid/v2 v2.1.2
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/openfga/api/proto v0.0.0-20260319214821-f153694bfc20
 	github.com/openfga/language/pkg/go v0.3.2-0.20260730144454-83fedf8a4e70
@@ -197,7 +198,6 @@ require (
 	github.com/myzhan/gomq v0.0.0-20220926014711-4eea0d4a1e75 // indirect
 	github.com/myzhan/gomq/zmtp v0.0.0-20220926014711-4eea0d4a1e75 // indirect
 	github.com/natefinch/wrap v0.2.0 // indirect
-	github.com/oklog/ulid/v2 v2.1.2 // indirect
 	github.com/olekukonko/cat v0.0.0-20250911104152-50322a0618f6 // indirect
 	github.com/olekukonko/errors v1.2.0 // indirect
 	github.com/olekukonko/ll v0.1.6 // indirect

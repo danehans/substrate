@@ -53,6 +53,9 @@ const (
 	TemplateNameKey       = attribute.Key("ate.template.name")
 	TemplateAtespaceKey   = attribute.Key("ate.template.atespace")
 	ActorVersionKey       = attribute.Key("ate.actor.version")
+	// ActorActivationKey is ActorStatus.activation_id, the ULID of one Run or
+	// Restore of the actor. Records about an actor with no activation omit it.
+	ActorActivationKey = attribute.Key("ate.actor.activation")
 )
 
 // TemplateUnknown is the fallback for a template dimension the emitter cannot
@@ -454,7 +457,7 @@ func ActorRefAttributes(actorRef resources.ActorRef) []attribute.KeyValue {
 
 // ActorAttributes is nil-safe; a nil Actor yields zero-valued attributes.
 func ActorAttributes(a *ateapi.Actor) []attribute.KeyValue {
-	return []attribute.KeyValue{
+	attrs := []attribute.KeyValue{
 		AtespaceKey.String(a.GetMetadata().GetAtespace()),
 		ActorNameKey.String(a.GetMetadata().GetName()),
 		ActorUIDKey.String(a.GetMetadata().GetUid()),
@@ -462,6 +465,10 @@ func ActorAttributes(a *ateapi.Actor) []attribute.KeyValue {
 		TemplateAtespaceKey.String(a.GetActorTemplate().GetAtespace()),
 		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),
 	}
+	if id := a.GetStatus().GetActivationId(); id != "" {
+		attrs = append(attrs, ActorActivationKey.String(id))
+	}
+	return attrs
 }
 
 // ActorLogLabels returns the actor identity stamped on every actor log record. A
@@ -479,6 +486,9 @@ func ActorLogLabels(a resources.ActorAttribution, containerName string) map[stri
 	if containerName != "" {
 		labels[string(ActorContainerNameKey)] = containerName
 	}
+	if a.ActivationID != "" {
+		labels[string(ActorActivationKey)] = a.ActivationID
+	}
 	return labels
 }
 
@@ -487,13 +497,17 @@ func ActorLogLabels(a resources.ActorAttribution, containerName string) map[stri
 // attributes. It must agree with ActorLogLabels key for key, or joining a
 // component record to the actor lifecycle stream takes two spellings.
 func ActorLogAttrs(a resources.ActorAttribution) []slog.Attr {
-	return []slog.Attr{
+	attrs := []slog.Attr{
 		slog.String(string(AtespaceKey), a.Ref.Atespace),
 		slog.String(string(ActorNameKey), a.Ref.Name),
 		slog.String(string(ActorUIDKey), a.UID),
 		slog.String(string(TemplateAtespaceKey), a.TemplateAtespace),
 		slog.String(string(TemplateNameKey), a.TemplateName),
 	}
+	if a.ActivationID != "" {
+		attrs = append(attrs, slog.String(string(ActorActivationKey), a.ActivationID))
+	}
+	return attrs
 }
 
 // ActorRefLogAttrs is ActorLogAttrs for a record written before the Actor

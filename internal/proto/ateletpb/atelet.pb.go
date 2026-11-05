@@ -2073,8 +2073,15 @@ type RunRequest struct {
 	//
 	// +k8s:required
 	SandboxRuntime *ActorSandboxRuntime `protobuf:"bytes,12,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The activation this request starts, from ActorStatus.activation_id. atelet
+	// passes it to the worker for attribution. Empty from a control plane that
+	// records no activation.
+	//
+	// +k8s:optional
+	// +k8s:maxLength=26 # a ULID
+	ActivationId  string `protobuf:"bytes,13,opt,name=activation_id,json=activationId,proto3" json:"activation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunRequest) Reset() {
@@ -2175,6 +2182,13 @@ func (x *RunRequest) GetSandboxRuntime() *ActorSandboxRuntime {
 		return x.SandboxRuntime
 	}
 	return nil
+}
+
+func (x *RunRequest) GetActivationId() string {
+	if x != nil {
+		return x.ActivationId
+	}
+	return ""
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -4005,8 +4019,15 @@ type RestoreRequest struct {
 	//
 	// +k8s:required
 	SandboxRuntime *ActorSandboxRuntime `protobuf:"bytes,12,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The activation this request starts, from ActorStatus.activation_id. atelet
+	// passes it to the worker for attribution. Empty from a control plane that
+	// records no activation.
+	//
+	// +k8s:optional
+	// +k8s:maxLength=26 # a ULID
+	ActivationId  string `protobuf:"bytes,13,opt,name=activation_id,json=activationId,proto3" json:"activation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RestoreRequest) Reset() {
@@ -4114,6 +4135,13 @@ func (x *RestoreRequest) GetSandboxRuntime() *ActorSandboxRuntime {
 		return x.SandboxRuntime
 	}
 	return nil
+}
+
+func (x *RestoreRequest) GetActivationId() string {
+	if x != nil {
+		return x.ActivationId
+	}
+	return ""
 }
 
 type RestoreResponse struct {
@@ -4520,7 +4548,7 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\x17actor_template_atespace\x18\x05 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\"\x13\n" +
-	"\x11TerminateResponse\"\xf4\x03\n" +
+	"\x11TerminateResponse\"\x99\x04\n" +
 	"\n" +
 	"RunRequest\x12$\n" +
 	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
@@ -4534,7 +4562,8 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\x0eegress_gateway\x18\t \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12:\n" +
 	"\tresources\x18\n" +
 	" \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\x12D\n" +
-	"\x0fsandbox_runtime\x18\f \x01(\v2\x1b.atelet.ActorSandboxRuntimeR\x0esandboxRuntimeB\x11\n" +
+	"\x0fsandbox_runtime\x18\f \x01(\v2\x1b.atelet.ActorSandboxRuntimeR\x0esandboxRuntime\x12#\n" +
+	"\ractivation_id\x18\r \x01(\tR\factivationIdB\x11\n" +
 	"\x0f_egress_gateway\")\n" +
 	"\rEgressGateway\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\"k\n" +
@@ -4642,7 +4671,7 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\bsnapshot\x18\b \x01(\v2\x10.atelet.SnapshotR\bsnapshot\x129\n" +
 	"\rupload_config\x18\t \x01(\v2\x14.atelet.UploadConfigR\fuploadConfig\"F\n" +
 	"\x12CheckpointResponse\x120\n" +
-	"\x05state\x18\x01 \x01(\v2\x1a.atelet.ActorSnapshotStateR\x05state\"\xa6\x04\n" +
+	"\x05state\x18\x01 \x01(\v2\x1a.atelet.ActorSnapshotStateR\x05state\"\xcb\x04\n" +
 	"\x0eRestoreRequest\x12$\n" +
 	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -4656,7 +4685,8 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\x0eegress_gateway\x18\t \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12:\n" +
 	"\tresources\x18\n" +
 	" \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\x12D\n" +
-	"\x0fsandbox_runtime\x18\f \x01(\v2\x1b.atelet.ActorSandboxRuntimeR\x0esandboxRuntimeB\x11\n" +
+	"\x0fsandbox_runtime\x18\f \x01(\v2\x1b.atelet.ActorSandboxRuntimeR\x0esandboxRuntime\x12#\n" +
+	"\ractivation_id\x18\r \x01(\tR\factivationIdB\x11\n" +
 	"\x0f_egress_gateway\"4\n" +
 	"\x0fRestoreResponse\x12!\n" +
 	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\"\x86\x02\n" +

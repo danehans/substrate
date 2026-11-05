@@ -723,6 +723,75 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 	})
 
+	t.Run("UpdateActor_Activation", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		const activation = "01JDQ5W2R3V6Z8B4N7K9M1P0XA"
+		created, err := s.CreateActor(ctx, &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "test-template"},
+			Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+		})
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		actorRef := resources.ActorRefFromActor(created)
+		read := func(op string, want *ateapi.Actor) {
+			t.Helper()
+			got, err := s.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor after %s failed: %v", op, err)
+			}
+			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("GetActor after %s (-want +got):\n%s", op, diff)
+			}
+			list, err := s.ListActors(ctx, testAtespace, store.ListOptions{})
+			if err != nil {
+				t.Fatalf("ListActors after %s failed: %v", op, err)
+			}
+			if len(list.Items) != 1 {
+				t.Fatalf("ListActors after %s returned %d actors, want 1", op, len(list.Items))
+			}
+			if diff := cmp.Diff(want, list.Items[0], protocmp.Transform()); diff != "" {
+				t.Errorf("ListActors after %s (-want +got):\n%s", op, diff)
+			}
+		}
+
+		resuming, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(dbActor *ateapi.Actor) error {
+			dbActor.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING
+			dbActor.Status.WorkerAssignment = &ateapi.WorkerAssignment{Worker: &ateapi.ObjectRef{Name: testWorkerName}}
+			dbActor.Status.ActivationId = activation
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateActor setting the activation failed: %v", err)
+		}
+		if got := resuming.GetStatus().GetActivationId(); got != activation {
+			t.Fatalf("UpdateActor returned activation_id %q, want %q", got, activation)
+		}
+		read("setting the activation", resuming)
+
+		crashed, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(resuming), func(dbActor *ateapi.Actor) error {
+			dbActor.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
+			dbActor.Status.Crash = &ateapi.ActorCrash{Message: "crashed", ActivationId: dbActor.Status.ActivationId}
+			dbActor.Status.WorkerAssignment = nil
+			dbActor.Status.ActivationId = ""
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateActor clearing the activation failed: %v", err)
+		}
+		if got := crashed.GetStatus().GetActivationId(); got != "" {
+			t.Errorf("UpdateActor returned activation_id %q after clearing it", got)
+		}
+		if got := crashed.GetStatus().GetCrash().GetActivationId(); got != activation {
+			t.Errorf("UpdateActor returned crash activation_id %q, want %q", got, activation)
+		}
+		read("clearing the activation", crashed)
+	})
+
 	t.Run("UpdateActor_Conflict", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()

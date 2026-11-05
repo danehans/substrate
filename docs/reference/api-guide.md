@@ -761,7 +761,7 @@ Because the guards are required and only a read supplies them, an update is alwa
 Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
-*   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).
+*   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment` and the activation in `status.activation_id`). Each resume that assigns a worker mints a new activation ID, a ULID. A retried resume of an actor left `ACTOR_STATE_RESUMING` gets a new one too, so no ID is sent to atelet twice. The ID is cleared with the worker assignment, and a crash records it in `status.crash.activation_id`.
 *   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`. When a suspended actor's node is deleted, resume restores its local snapshot on another node from the snapshot's upload, even if atelet never reported the upload complete. Resume does this once another node has room. If atelet finds no upload, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot. Revert deletes an upload that was never reported complete, so a snapshot is lost if its restore fails for another reason, or if the actor is reverted before it resumes.
 
 #### `SuspendActor`

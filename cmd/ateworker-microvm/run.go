@@ -265,6 +265,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		actorDirs:        req.GetActorDirs(),
 		templateAtespace: req.GetActorTemplateAtespace(),
 		templateName:     req.GetActorTemplateName(),
+		activationID:     req.GetActivationId(),
 		containers:       req.GetSpec().GetContainers(),
 		assetPaths:       req.GetRuntimeAssetPaths(),
 		egressGateway:    req.GetEgressGateway(),
@@ -310,8 +311,10 @@ type actorBootParams struct {
 	actorDirs        *ateworkerpb.ActorDirs
 	templateAtespace string
 	templateName     string
-	containers       []*ateworkerpb.Container
-	assetPaths       map[string]string
+	// activationID is the activation the Run or Restore request starts.
+	activationID string
+	containers   []*ateworkerpb.Container
+	assetPaths   map[string]string
 	// egressGateway is nil unless actor TCP should be redirected through atunnel.
 	egressGateway *ateworkerpb.EgressGateway
 	// size is the actor's declared limits (from the ActorTemplate), supplied on
@@ -331,6 +334,7 @@ func (p actorBootParams) attribution() resources.ActorAttribution {
 		UID:              p.actorUID,
 		TemplateAtespace: p.templateAtespace,
 		TemplateName:     p.templateName,
+		ActivationID:     p.activationID,
 	}
 }
 
@@ -342,6 +346,7 @@ func (p actorBootParams) actorAttribution() resources.ActorAttribution {
 		UID:              p.actorUID,
 		TemplateAtespace: p.templateAtespace,
 		TemplateName:     p.templateName,
+		ActivationID:     p.activationID,
 	}
 }
 
