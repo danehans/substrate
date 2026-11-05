@@ -27,6 +27,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,11 @@ func TestBrokerCertificateSourceMintsAndReusesKey(t *testing.T) {
 	second := receiveWithin(t, broker.publicKeys, "second certificate public key")
 	if string(first) != string(second) {
 		t.Fatal("renewal replaced the actor private key")
+	}
+	// Every mint, the first and each renewal, names the activation the
+	// source was built for.
+	if want := []string{testActivationID, testActivationID}; !slices.Equal(broker.activations, want) {
+		t.Fatalf("activations sent = %q, want %q", broker.activations, want)
 	}
 	cert, err := source.GetClientCertificate(nil)
 	if err != nil {
@@ -92,10 +98,13 @@ type workerSupportStub struct {
 	failFirst int
 	failCode  codes.Code
 	calls     int
+	// activations records the activation_id of every mint that reached the stub.
+	activations []string
 }
 
 func (s *workerSupportStub) MintActorCertificate(_ context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
 	s.calls++
+	s.activations = append(s.activations, req.GetActivationId())
 	if s.failFirst > 0 {
 		s.failFirst--
 		return nil, status.Error(s.failCode, "broker busy")
@@ -187,6 +196,7 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 		ActorAtespace:        "actor-atespace",
 		ActorName:            "actor-name",
 		ActorUID:             "actor-uid",
+		ActorActivationID:    testActivationID,
 		AteletSPIFFEID:       installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
 	})
 	if err != nil {
@@ -194,6 +204,9 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 	}
 	return source, broker
 }
+
+// testActivationID is the activation the test source was given on Run or Restore.
+const testActivationID = "01JC2Z6N8Q3W9X4Y5Z6A7B8C9D"
 
 func testAteletIdentity(nodeName string) *substratex509.PodIdentity {
 	return &substratex509.PodIdentity{
