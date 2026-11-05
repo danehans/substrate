@@ -287,7 +287,28 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorReq
 }
 
 func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
-	storedActor, err := s.store.UpdateActor(ctx, actorRef, precondition, func(toUpdate *ateapi.Actor) error {
+	storedActor, err := s.store.UpdateActor(ctx, actorRef, precondition, s.validatedActorMutate(ctx, mutate))
+	if err != nil {
+		return nil, actorUpdateError(actorRef, err)
+	}
+	return storedActor, nil
+}
+
+// UpdateActorWithReceipt validates the update as UpdateActor does.
+func (s *ServiceImpl) UpdateActorWithReceipt(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, receipt func(*ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.LifecycleReceipt, error) {
+	if mutate != nil {
+		mutate = s.validatedActorMutate(ctx, mutate)
+	}
+	storedActor, stored, err := s.store.UpdateActorWithReceipt(ctx, actorRef, precondition, mutate, receipt, create)
+	if err != nil {
+		return nil, nil, actorUpdateError(actorRef, err)
+	}
+	return storedActor, stored, nil
+}
+
+// validatedActorMutate wraps mutate with the checks every Actor update runs.
+func (s *ServiceImpl) validatedActorMutate(ctx context.Context, mutate func(*ateapi.Actor) error) func(*ateapi.Actor) error {
+	return func(toUpdate *ateapi.Actor) error {
 		// Apply the mutation function to the stored value.
 		oldVal := proto.CloneOf(toUpdate)
 		if err := mutate(toUpdate); err != nil {
@@ -340,23 +361,24 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		}
 
 		return nil
-	})
-	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("actor %s not found", actorRef)
-		}
-		if errors.Is(err, store.ErrPreconditionRequired) {
-			return nil, apierror.InvalidArgument("while updating actor %s: %v", actorRef, err)
-		}
-		return nil, fmt.Errorf("while updating actor: %w", err)
 	}
-	return storedActor, nil
+}
+
+// actorUpdateError maps a store error from an Actor update to an API error.
+func actorUpdateError(actorRef resources.ActorRef, err error) error {
+	if errors.Is(err, store.ErrVersionConflict) {
+		return apierror.Aborted("concurrent update conflict, please retry")
+	}
+	if errors.Is(err, store.ErrUIDConflict) {
+		return apierror.Aborted("concurrent update conflict, please retry")
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return apierror.NotFound("actor %s not found", actorRef)
+	}
+	if errors.Is(err, store.ErrPreconditionRequired) {
+		return apierror.InvalidArgument("while updating actor %s: %v", actorRef, err)
+	}
+	return fmt.Errorf("while updating actor: %w", err)
 }
 
 // validateTemplateVolumesUnchanged rejects a template repoint that changes
@@ -454,7 +476,7 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapi.DeleteActorReq
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, toDeletePreconditions(req.GetOptions()))
+	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, store.DeletePreconditions{UID: req.GetOptions().GetUid(), Version: req.GetOptions().GetVersion()}, req.GetOptions().GetExpectedActivation())
 	if err != nil {
 		return nil, err
 	}
@@ -470,6 +492,10 @@ func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	return s.store.DeleteActor(ctx, actorRef, precondition)
 }
 
+func (s *ServiceImpl) GetActorLifecycleReceipt(ctx context.Context, actorRef resources.ActorRef, requestID string) (*ateapi.LifecycleReceipt, error) {
+	return s.store.GetActorLifecycleReceipt(ctx, actorRef, requestID)
+}
+
 func (s *RPCService) ResumeActor(ctx context.Context, req *ateapi.ResumeActorRequest) (*ateapi.ResumeActorResponse, error) {
 	if errs := apivalidation.ValidateResumeActorRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
@@ -477,7 +503,11 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapi.ResumeActorReq
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef)
+	actor, resumed, receipt, err := s.actorWorkflow.ResumeActor(ctx, actorRef, lifecycleConditions{
+		expectedUID:        req.GetExpectedUid(),
+		expectedActivation: req.GetExpectedActivation(),
+		requestID:          req.GetRequestId(),
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
@@ -488,8 +518,10 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapi.ResumeActorReq
 		return nil, err
 	}
 
-	setSpanActorAttributes(ctx, actor)
-	return &ateapi.ResumeActorResponse{Actor: actor, Resumed: resumed}, nil
+	if actor != nil {
+		setSpanActorAttributes(ctx, actor)
+	}
+	return &ateapi.ResumeActorResponse{Actor: actor, Resumed: resumed, Receipt: receipt}, nil
 }
 
 func (s *RPCService) SuspendActor(ctx context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error) {
@@ -499,7 +531,11 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapi.SuspendActorR
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendModeFromOptions(req.GetOptions()))
+	actor, receipt, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendModeFromOptions(req.GetOptions()), lifecycleConditions{
+		expectedUID:        req.GetExpectedUid(),
+		expectedActivation: req.GetExpectedActivation(),
+		requestID:          req.GetRequestId(),
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
@@ -509,8 +545,10 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapi.SuspendActorR
 		}
 		return nil, err
 	}
-	setSpanActorAttributes(ctx, actor)
-	return &ateapi.SuspendActorResponse{Actor: actor}, nil
+	if actor != nil {
+		setSpanActorAttributes(ctx, actor)
+	}
+	return &ateapi.SuspendActorResponse{Actor: actor, Receipt: receipt}, nil
 }
 
 // CrashActorReportedByWorker crashes a RUNNING actor whose sandbox died, on

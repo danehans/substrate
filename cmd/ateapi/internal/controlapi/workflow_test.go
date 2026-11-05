@@ -78,7 +78,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 				},
 			},
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapi.Actor, _ *ateapi.ActorTemplate) {
-				if _, err := w.SuspendActor(context.Background(), ref, suspendAsync); err != nil {
+				if _, _, err := w.SuspendActor(context.Background(), ref, suspendAsync, lifecycleConditions{}); err != nil {
 					t.Fatalf("SuspendActor: %v", err)
 				}
 			},
@@ -90,11 +90,11 @@ func TestActorStateChangeRecords(t *testing.T) {
 			name:      "delete marks the actor deleting",
 			seedState: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapi.Actor, _ *ateapi.ActorTemplate) {
-				if _, err := w.ensureMarkedDeleting(context.Background(), ref, store.DeletePreconditions{}); err != nil {
+				if _, err := w.ensureMarkedDeleting(context.Background(), ref, store.DeletePreconditions{}, ""); err != nil {
 					t.Fatalf("ensureMarkedDeleting: %v", err)
 				}
 				// A retry finds the actor already marked and writes no second record.
-				if _, err := w.ensureMarkedDeleting(context.Background(), ref, store.DeletePreconditions{}); err != nil {
+				if _, err := w.ensureMarkedDeleting(context.Background(), ref, store.DeletePreconditions{}, ""); err != nil {
 					t.Fatalf("retried ensureMarkedDeleting: %v", err)
 				}
 			},
@@ -187,7 +187,7 @@ func markOnly(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ate
 		t.Fatalf("UpdateActor: %v", err)
 	}
 	w.dialer = newDanglingDialer()
-	_, err := w.SuspendActor(ctx, ref, mode)
+	_, _, err := w.SuspendActor(ctx, ref, mode, lifecycleConditions{})
 	assertStoppedAtDial(t, err)
 }
 
@@ -307,7 +307,7 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 	}
 
 	w := &ActorWorkflow{store: persistence}
-	if _, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{Version: stale.GetMetadata().GetVersion()}); apierror.Code(err) != codes.Aborted {
+	if _, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{Version: stale.GetMetadata().GetVersion()}, ""); apierror.Code(err) != codes.Aborted {
 		t.Fatalf("ensureMarkedDeleting with a stale guard = %v, want ABORTED", err)
 	}
 	if len(*records) != 0 {

@@ -17,8 +17,14 @@ package controlapi
 import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
 )
 
-func toDeletePreconditions(opts *ateapi.DeleteOptions) store.DeletePreconditions {
-	return store.DeletePreconditions{UID: opts.GetUid(), Version: opts.GetVersion()}
+// toDeletePreconditions maps opts for a delete of anything but an Actor,
+// which has no activation to expect.
+func toDeletePreconditions(opts *ateapi.DeleteOptions) (store.DeletePreconditions, error) {
+	if opts.GetExpectedActivation() != "" {
+		return store.DeletePreconditions{}, apierror.InvalidArgument("options.expected_activation applies only to DeleteActor")
+	}
+	return store.DeletePreconditions{UID: opts.GetUid(), Version: opts.GetVersion()}, nil
 }

@@ -175,6 +175,8 @@ func (w *ActorWorkflow) copySnapshot(ctx context.Context, src, dst resources.Sto
 type actorWorkflowStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
+	GetActorLifecycleReceipt(ctx context.Context, actorRef resources.ActorRef, requestID string) (*ateapi.LifecycleReceipt, error)
+	UpdateActorWithReceipt(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapi.Actor) error, receipt func(stored *ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.LifecycleReceipt, error)
 	MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
 	DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.Actor, error)
 	GetWorker(ctx context.Context, name string) (*ateapi.Worker, error)

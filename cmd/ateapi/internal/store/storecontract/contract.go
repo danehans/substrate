@@ -332,6 +332,7 @@ func testMarkForDeletion[R any, T resourceMessage](t *testing.T, c markForDeleti
 // notifications is not covered here; see atepg's own test file for that.
 func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runActorContractTests(t, setup)
+	runLifecycleReceiptContractTests(t, setup)
 	runEgressPolicyContractTests(t, setup)
 	runWorkerContractTests(t, setup)
 	runWorkerAssignmentContractTests(t, setup)
@@ -341,6 +342,205 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runLeaseContractTests(t, setup)
 	runListOptionsContractTests(t, setup)
 	runUnknownFieldContractTests(t, setup)
+}
+
+func runLifecycleReceiptContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	const requestID = "incident-7/suspend-1"
+	newReceipt := func(state ateapi.ActorState) func(*ateapi.Actor) *ateapi.LifecycleReceipt {
+		return func(stored *ateapi.Actor) *ateapi.LifecycleReceipt {
+			return &ateapi.LifecycleReceipt{
+				RequestId: requestID,
+				Operation: ateapi.LifecycleOperation_LIFECYCLE_OPERATION_SUSPEND,
+				Actor:     &ateapi.ObjectRef{Atespace: stored.GetMetadata().GetAtespace(), Name: stored.GetMetadata().GetName()},
+				ActorUid:  stored.GetMetadata().GetUid(),
+				State:     state,
+			}
+		}
+	}
+	setState := func(state ateapi.ActorState) func(*ateapi.Actor) error {
+		return func(a *ateapi.Actor) error {
+			a.Status.State = state
+			return nil
+		}
+	}
+	createActor := func(t *testing.T, s store.Interface) (*ateapi.Actor, resources.ActorRef) {
+		t.Helper()
+		mustCreateAtespace(t, s, testAtespace)
+		created, err := s.CreateActor(context.Background(), newTestSuspendedActor(testAtespace, "session-1"))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		return created, resources.ActorRefFromActor(created)
+	}
+
+	t.Run("UpdateActorWithReceipt_CreateAndReplace", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		created, actorRef := createActor(t, s)
+
+		if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetActorLifecycleReceipt before any write = %v, want ErrNotFound", err)
+		}
+		if _, _, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(created), nil, newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDING), false); !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("replacing a receipt that does not exist = %v, want ErrVersionConflict", err)
+		}
+
+		suspending, first, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(created), setState(ateapi.ActorState_ACTOR_STATE_SUSPENDING), newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDING), true)
+		if err != nil {
+			t.Fatalf("UpdateActorWithReceipt create failed: %v", err)
+		}
+		if got := suspending.GetMetadata().GetVersion(); got <= created.GetMetadata().GetVersion() {
+			t.Errorf("actor version = %d, want it advanced past %d", got, created.GetMetadata().GetVersion())
+		}
+		if got := first.GetActorUid(); got != created.GetMetadata().GetUid() {
+			t.Errorf("receipt actor_uid = %q, want %q", got, created.GetMetadata().GetUid())
+		}
+		if got, want := first.GetExpireTime().AsTime().Sub(first.GetCreateTime().AsTime()), store.LifecycleReceiptRetention; got != want {
+			t.Errorf("receipt retention = %v, want %v", got, want)
+		}
+		got, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID)
+		if err != nil {
+			t.Fatalf("GetActorLifecycleReceipt failed: %v", err)
+		}
+		if diff := cmp.Diff(first, got, protocmp.Transform()); diff != "" {
+			t.Errorf("stored receipt (-want +got):\n%s", diff)
+		}
+
+		// A second create for the request fails, and its actor write is
+		// rolled back with it.
+		if _, _, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(suspending), setState(ateapi.ActorState_ACTOR_STATE_CRASHED), newReceipt(ateapi.ActorState_ACTOR_STATE_CRASHED), true); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Fatalf("second create = %v, want ErrAlreadyExists", err)
+		}
+		if after, err := s.GetActor(ctx, actorRef); err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		} else if diff := cmp.Diff(suspending, after, protocmp.Transform()); diff != "" {
+			t.Errorf("actor after a failed create (-want +got):\n%s", diff)
+		}
+
+		suspended, replaced, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(suspending), setState(ateapi.ActorState_ACTOR_STATE_SUSPENDED), newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDED), false)
+		if err != nil {
+			t.Fatalf("UpdateActorWithReceipt replace failed: %v", err)
+		}
+		if got := suspended.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+			t.Errorf("actor state = %v, want SUSPENDED", got)
+		}
+		if got := replaced.GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+			t.Errorf("replaced receipt state = %v, want SUSPENDED", got)
+		}
+		if !proto.Equal(replaced.GetCreateTime(), first.GetCreateTime()) || !proto.Equal(replaced.GetExpireTime(), first.GetExpireTime()) {
+			t.Errorf("replace changed the receipt timestamps to %v/%v, want %v/%v", replaced.GetCreateTime(), replaced.GetExpireTime(), first.GetCreateTime(), first.GetExpireTime())
+		}
+	})
+
+	t.Run("UpdateActorWithReceipt_NilMutateWritesOnlyReceipt", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		created, actorRef := createActor(t, s)
+
+		stored, _, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(created), nil, newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDED), true)
+		if err != nil {
+			t.Fatalf("UpdateActorWithReceipt failed: %v", err)
+		}
+		if diff := cmp.Diff(created, stored, protocmp.Transform()); diff != "" {
+			t.Errorf("returned actor (-want +got):\n%s", diff)
+		}
+		if after, err := s.GetActor(ctx, actorRef); err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		} else if after.GetMetadata().GetVersion() != created.GetMetadata().GetVersion() {
+			t.Errorf("actor version = %d, want %d unchanged", after.GetMetadata().GetVersion(), created.GetMetadata().GetVersion())
+		}
+		if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID); err != nil {
+			t.Errorf("GetActorLifecycleReceipt failed: %v", err)
+		}
+	})
+
+	t.Run("UpdateActorWithReceipt_FailureStoresNothing", func(t *testing.T) {
+		mutateErr := errors.New("mutate refused")
+		for _, tc := range []struct {
+			name         string
+			precondition func(created *ateapi.Actor) store.Precondition
+			mutate       func(*ateapi.Actor) error
+			wantErr      error
+		}{
+			{
+				name: "stale version",
+				precondition: func(c *ateapi.Actor) store.Precondition {
+					return store.Precondition{UID: c.GetMetadata().GetUid(), Version: c.GetMetadata().GetVersion() + 1}
+				},
+				wantErr: store.ErrVersionConflict,
+			},
+			{
+				name: "other uid",
+				precondition: func(c *ateapi.Actor) store.Precondition {
+					return store.Precondition{UID: foreignUID, Version: c.GetMetadata().GetVersion()}
+				},
+				wantErr: store.ErrUIDConflict,
+			},
+			{
+				name:         "missing precondition",
+				precondition: func(*ateapi.Actor) store.Precondition { return store.Precondition{} },
+				wantErr:      store.ErrPreconditionRequired,
+			},
+			{
+				name:         "mutate error",
+				precondition: func(c *ateapi.Actor) store.Precondition { return store.PreconditionFrom(c) },
+				mutate:       func(*ateapi.Actor) error { return mutateErr },
+				wantErr:      mutateErr,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := setup(t)
+				ctx := context.Background()
+				created, actorRef := createActor(t, s)
+				if _, _, err := s.UpdateActorWithReceipt(ctx, actorRef, tc.precondition(created), tc.mutate, newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDED), true); !errors.Is(err, tc.wantErr) {
+					t.Fatalf("UpdateActorWithReceipt = %v, want %v", err, tc.wantErr)
+				}
+				if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID); !errors.Is(err, store.ErrNotFound) {
+					t.Errorf("GetActorLifecycleReceipt after the failed write = %v, want ErrNotFound", err)
+				}
+			})
+		}
+	})
+
+	t.Run("LifecycleReceipt_OutlivesActor", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		created, actorRef := createActor(t, s)
+		if _, _, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(created), nil, newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDED), true); err != nil {
+			t.Fatalf("UpdateActorWithReceipt failed: %v", err)
+		}
+		if _, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteActor failed: %v", err)
+		}
+		got, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID)
+		if err != nil {
+			t.Fatalf("GetActorLifecycleReceipt after DeleteActor failed: %v", err)
+		}
+		if got.GetActorUid() != created.GetMetadata().GetUid() {
+			t.Errorf("receipt actor_uid = %q, want the deleted actor's %q", got.GetActorUid(), created.GetMetadata().GetUid())
+		}
+
+		// A replacement under the same name sees the same receipt.
+		replacement, err := s.CreateActor(ctx, newTestSuspendedActor(testAtespace, actorRef.Name))
+		if err != nil {
+			t.Fatalf("CreateActor replacement failed: %v", err)
+		}
+		if _, _, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(replacement), nil, newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDED), true); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Errorf("create on the replacement = %v, want ErrAlreadyExists", err)
+		}
+		if _, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteActor replacement failed: %v", err)
+		}
+
+		if _, err := s.DeleteAtespace(ctx, testAtespace, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteAtespace failed: %v", err)
+		}
+		if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActorLifecycleReceipt after DeleteAtespace = %v, want ErrNotFound", err)
+		}
+	})
 }
 
 func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
