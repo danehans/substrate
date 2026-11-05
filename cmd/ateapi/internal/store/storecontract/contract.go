@@ -333,6 +333,7 @@ func testMarkForDeletion[R any, T resourceMessage](t *testing.T, c markForDeleti
 func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runActorContractTests(t, setup)
 	runLifecycleReceiptContractTests(t, setup)
+	runActorHoldContractTests(t, setup)
 	runEgressPolicyContractTests(t, setup)
 	runWorkerContractTests(t, setup)
 	runWorkerAssignmentContractTests(t, setup)
@@ -612,6 +613,249 @@ func runLifecycleReceiptContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 		if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("GetActorLifecycleReceipt after DeleteAtespace = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+func runActorHoldContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	const holderA, holderB = "user:security-a", "user:security-b"
+	holdReceipt := func(holder, requestID string) func(*ateapi.Actor) *ateapi.LifecycleReceipt {
+		return func(stored *ateapi.Actor) *ateapi.LifecycleReceipt {
+			return &ateapi.LifecycleReceipt{
+				RequestId: requestID,
+				Operation: ateapi.LifecycleOperation_LIFECYCLE_OPERATION_HOLD,
+				Actor:     &ateapi.ObjectRef{Atespace: stored.GetMetadata().GetAtespace(), Name: stored.GetMetadata().GetName()},
+				ActorUid:  stored.GetMetadata().GetUid(),
+				Hold:      &ateapi.ActorHold{Holder: holder, RequestId: requestID, Reason: "incident"},
+			}
+		}
+	}
+	releaseReceipt := func(holder, requestID, holdRequestID string) func(*ateapi.Actor, *ateapi.ActorHold) *ateapi.LifecycleReceipt {
+		return func(stored *ateapi.Actor, released *ateapi.ActorHold) *ateapi.LifecycleReceipt {
+			r := &ateapi.LifecycleReceipt{
+				RequestId: requestID,
+				Operation: ateapi.LifecycleOperation_LIFECYCLE_OPERATION_RELEASE_HOLD,
+				ActorUid:  stored.GetMetadata().GetUid(),
+				Hold:      &ateapi.ActorHold{Holder: holder, RequestId: holdRequestID},
+			}
+			if released != nil {
+				r.Hold, r.Transitioned = released, true
+			}
+			return r
+		}
+	}
+	allow := func(*ateapi.Actor) error { return nil }
+	holders := func(a *ateapi.Actor) []string {
+		var out []string
+		for _, h := range a.GetStatus().GetHolds() {
+			out = append(out, h.GetHolder()+"/"+h.GetRequestId())
+		}
+		return out
+	}
+	createActor := func(t *testing.T, s store.Interface) (*ateapi.Actor, resources.ActorRef) {
+		t.Helper()
+		mustCreateAtespace(t, s, testAtespace)
+		created, err := s.CreateActor(context.Background(), newTestSuspendedActor(testAtespace, "session-1"))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		return created, resources.ActorRefFromActor(created)
+	}
+	mustGet := func(t *testing.T, s store.Interface, ref resources.ActorRef) *ateapi.Actor {
+		t.Helper()
+		a, err := s.GetActor(context.Background(), ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		return a
+	}
+
+	t.Run("PlaceAndRelease", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		created, actorRef := createActor(t, s)
+
+		held, first, err := s.PlaceActorHold(ctx, actorRef, allow, holdReceipt(holderA, "hold-a"))
+		if err != nil {
+			t.Fatalf("PlaceActorHold failed: %v", err)
+		}
+		if got := held.GetMetadata().GetVersion(); got <= created.GetMetadata().GetVersion() {
+			t.Errorf("actor version = %d, want it advanced past %d", got, created.GetMetadata().GetVersion())
+		}
+		if first.GetHold().GetCreateTime() == nil || first.GetCreateTime() == nil {
+			t.Errorf("receipt %v has no create times", first)
+		}
+		if diff := cmp.Diff([]*ateapi.ActorHold{first.GetHold()}, mustGet(t, s, actorRef).GetStatus().GetHolds(), protocmp.Transform()); diff != "" {
+			t.Errorf("status.holds (-want +got):\n%s", diff)
+		}
+		for _, get := range []func() (*ateapi.LifecycleReceipt, error){
+			func() (*ateapi.LifecycleReceipt, error) { return s.GetActorHold(ctx, actorRef, holderA) },
+			func() (*ateapi.LifecycleReceipt, error) { return s.GetActorLifecycleReceipt(ctx, actorRef, "hold-a") },
+		} {
+			if got, err := get(); err != nil {
+				t.Errorf("reading the hold receipt failed: %v", err)
+			} else if diff := cmp.Diff(first, got, protocmp.Transform()); diff != "" {
+				t.Errorf("stored hold receipt (-want +got):\n%s", diff)
+			}
+		}
+
+		// A second hold by the same holder fails and writes nothing.
+		if _, _, err := s.PlaceActorHold(ctx, actorRef, allow, holdReceipt(holderA, "hold-a2")); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Fatalf("second hold by one holder = %v, want ErrAlreadyExists", err)
+		}
+		if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, "hold-a2"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("receipt of the refused hold = %v, want ErrNotFound", err)
+		}
+		// No two holds share a request_id, whoever holds them.
+		if _, _, err := s.PlaceActorHold(ctx, actorRef, allow, holdReceipt(holderB, "hold-a")); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Fatalf("hold reusing another holder's request_id = %v, want ErrAlreadyExists", err)
+		}
+		if _, _, err := s.PlaceActorHold(ctx, actorRef, allow, holdReceipt(holderB, "hold-b")); err != nil {
+			t.Fatalf("PlaceActorHold by a second holder failed: %v", err)
+		}
+		if got, want := holders(mustGet(t, s, actorRef)), []string{holderA + "/hold-a", holderB + "/hold-b"}; !slices.Equal(got, want) {
+			t.Fatalf("holds = %v, want %v", got, want)
+		}
+
+		// A release names the holder and the hold's request: neither another
+		// holder's hold nor another request releases anything.
+		for _, tc := range []struct{ holder, holdRequestID, requestID string }{
+			{holderA, "hold-b", "release-1"},
+			{holderB, "hold-a", "release-2"},
+		} {
+			_, r, err := s.ReleaseActorHold(ctx, actorRef, tc.holder, tc.holdRequestID, allow, releaseReceipt(tc.holder, tc.requestID, tc.holdRequestID))
+			if err != nil {
+				t.Fatalf("ReleaseActorHold(%s, %s) failed: %v", tc.holder, tc.holdRequestID, err)
+			}
+			if r.GetTransitioned() {
+				t.Errorf("ReleaseActorHold(%s, %s) released a hold", tc.holder, tc.holdRequestID)
+			}
+			if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, tc.requestID); err != nil {
+				t.Errorf("receipt of a release that found no hold: %v", err)
+			}
+		}
+		if got := len(mustGet(t, s, actorRef).GetStatus().GetHolds()); got != 2 {
+			t.Fatalf("holds after releases that match nothing = %d, want 2", got)
+		}
+
+		_, released, err := s.ReleaseActorHold(ctx, actorRef, holderA, "hold-a", allow, releaseReceipt(holderA, "release-3", "hold-a"))
+		if err != nil {
+			t.Fatalf("ReleaseActorHold failed: %v", err)
+		}
+		if !released.GetTransitioned() || !proto.Equal(released.GetHold(), first.GetHold()) {
+			t.Errorf("release receipt = %v, want the released hold %v", released, first.GetHold())
+		}
+		if got, want := holders(mustGet(t, s, actorRef)), []string{holderB + "/hold-b"}; !slices.Equal(got, want) {
+			t.Errorf("holds after releasing A = %v, want %v", got, want)
+		}
+		if _, err := s.GetActorHold(ctx, actorRef, holderA); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActorHold after release = %v, want ErrNotFound", err)
+		}
+		// The released hold's receipt is kept from the release, so a retry
+		// of the hold finds it.
+		kept, err := s.GetActorLifecycleReceipt(ctx, actorRef, "hold-a")
+		if err != nil {
+			t.Fatalf("hold receipt after release: %v", err)
+		}
+		if diff := cmp.Diff(first, kept, protocmp.Transform()); diff != "" {
+			t.Errorf("kept hold receipt (-original +got):\n%s", diff)
+		}
+	})
+
+	t.Run("CheckFailureStoresNothing", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		created, actorRef := createActor(t, s)
+		refused := errors.New("check refused")
+		if _, _, err := s.PlaceActorHold(ctx, actorRef, func(*ateapi.Actor) error { return refused }, holdReceipt(holderA, "hold-a")); !errors.Is(err, refused) {
+			t.Fatalf("PlaceActorHold = %v, want %v", err, refused)
+		}
+		if diff := cmp.Diff(created, mustGet(t, s, actorRef), protocmp.Transform()); diff != "" {
+			t.Errorf("actor after a refused hold (-want +got):\n%s", diff)
+		}
+		if _, err := s.GetActorHold(ctx, actorRef, holderA); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActorHold after a refused hold = %v, want ErrNotFound", err)
+		}
+		if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, "hold-a"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("receipt of a refused hold = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("OtherWritesKeepHolds", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		_, actorRef := createActor(t, s)
+		held, r, err := s.PlaceActorHold(ctx, actorRef, allow, holdReceipt(holderA, "hold-a"))
+		if err != nil {
+			t.Fatalf("PlaceActorHold failed: %v", err)
+		}
+		want := []*ateapi.ActorHold{r.GetHold()}
+		// Each write replaces the whole status, as RevertActor and the
+		// upload bookkeeping rewrite parts of it.
+		replaceStatus := func(a *ateapi.Actor) error {
+			a.Status = &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED}
+			return nil
+		}
+		updated, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(held), replaceStatus)
+		if err != nil {
+			t.Fatalf("UpdateActor failed: %v", err)
+		}
+		if diff := cmp.Diff(want, updated.GetStatus().GetHolds(), protocmp.Transform()); diff != "" {
+			t.Errorf("holds after UpdateActor (-want +got):\n%s", diff)
+		}
+		updated, _, err = s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(updated), func(a *ateapi.Actor) error {
+			a.Status = nil
+			return nil
+		}, func(stored *ateapi.Actor) *ateapi.LifecycleReceipt {
+			return &ateapi.LifecycleReceipt{RequestId: "suspend-1", ActorUid: stored.GetMetadata().GetUid()}
+		}, true)
+		if err != nil {
+			t.Fatalf("UpdateActorWithReceipt failed: %v", err)
+		}
+		if diff := cmp.Diff(want, updated.GetStatus().GetHolds(), protocmp.Transform()); diff != "" {
+			t.Errorf("holds after UpdateActorWithReceipt (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff(want, mustGet(t, s, actorRef).GetStatus().GetHolds(), protocmp.Transform()); diff != "" {
+			t.Errorf("stored holds (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("DeleteActorRefusedWhileHeld", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		_, actorRef := createActor(t, s)
+		if _, _, err := s.PlaceActorHold(ctx, actorRef, allow, holdReceipt(holderA, "hold-a")); err != nil {
+			t.Fatalf("PlaceActorHold failed: %v", err)
+		}
+		if _, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Fatalf("DeleteActor of a held actor = %v, want ErrFailedPrecondition", err)
+		}
+		mustGet(t, s, actorRef)
+		if _, _, err := s.ReleaseActorHold(ctx, actorRef, holderA, "hold-a", allow, releaseReceipt(holderA, "release-a", "hold-a")); err != nil {
+			t.Fatalf("ReleaseActorHold failed: %v", err)
+		}
+		if _, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteActor after release failed: %v", err)
+		}
+	})
+
+	t.Run("ReplacementIsNotHeld", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		in := newTestSuspendedActor(testAtespace, "session-1")
+		in.Status.Holds = []*ateapi.ActorHold{{Holder: holderA, RequestId: "forged"}}
+		created, err := s.CreateActor(ctx, in)
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		if got := created.GetStatus().GetHolds(); len(got) != 0 {
+			t.Errorf("created actor holds = %v, want none", got)
+		}
+		if got := mustGet(t, s, resources.ActorRefFromActor(created)).GetStatus().GetHolds(); len(got) != 0 {
+			t.Errorf("stored actor holds = %v, want none", got)
 		}
 	})
 }

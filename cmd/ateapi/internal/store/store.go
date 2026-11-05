@@ -123,6 +123,28 @@ type Interface interface {
 	// there is none, for example because it expired.
 	UpdateActorWithReceipt(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error, receipt func(stored *ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.LifecycleReceipt, error)
 
+	// GetActorHold returns the receipt of the HoldActor call that placed
+	// holder's hold on the Actor in actorRef. Returns ErrNotFound if holder
+	// has no hold on it.
+	GetActorHold(ctx context.Context, actorRef resources.ActorRef, holder string) (*ateapi.LifecycleReceipt, error)
+
+	// PlaceActorHold stores the hold that receipt(stored).hold records, in
+	// one transaction with the write that appends it to status.holds and the
+	// receipt, created as UpdateActorWithReceipt creates one. check runs on
+	// the locked Actor first, and its error is returned as it is. Returns
+	// ErrNotFound if the Actor is missing, and ErrAlreadyExists if the holder
+	// already has a hold on it, another hold has the same request_id, or the
+	// request already has a receipt.
+	PlaceActorHold(ctx context.Context, actorRef resources.ActorRef, check func(*ateapi.Actor) error, receipt func(stored *ateapi.Actor) *ateapi.LifecycleReceipt) (*ateapi.Actor, *ateapi.LifecycleReceipt, error)
+
+	// ReleaseActorHold deletes holder's hold on the Actor if its request_id
+	// is holdRequestID, removes it from status.holds, and creates the
+	// receipt, all in one transaction. receipt gets the released hold, or nil
+	// if there was none; the receipt is stored either way. The released
+	// hold's own receipt is kept LifecycleReceiptRetention from the release.
+	// check is as for PlaceActorHold.
+	ReleaseActorHold(ctx context.Context, actorRef resources.ActorRef, holder, holdRequestID string, check func(*ateapi.Actor) error, receipt func(stored *ateapi.Actor, released *ateapi.ActorHold) *ateapi.LifecycleReceipt) (*ateapi.Actor, *ateapi.LifecycleReceipt, error)
+
 	// MarkActorForDeletion initiates the deletion of an actor. It sets
 	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
 	// update the actor's status. Returns ErrNotFound if missing,
@@ -133,7 +155,7 @@ type Interface interface {
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
 	// missing, ErrUIDConflict/ErrVersionConflict if precondition does not
 	// describe the actor the caller observed, or ErrFailedPrecondition if the
-	// actor's status.worker_assignment is set.
+	// actor's status.worker_assignment is set or the actor has a hold.
 	DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition DeletePreconditions) (*ateapi.Actor, error)
 
 	// Creates the 1:1 policy subresource for an existing Actor.
