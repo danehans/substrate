@@ -245,6 +245,13 @@ message RunWorkloadRequest {
   ResourceRequirements resources = 10;
   // +k8s:required
   ActorDirs actor_dirs = 12;
+
+  // The activation this request starts, from ActorStatus.activation_id.
+  // Telemetry about the workload carries it as ate.actor.activation.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string activation_id = 13;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -569,6 +576,13 @@ message RestoreWorkloadRequest {
   //
   // +k8s:optional
   bool preserve_restore_dir = 14;
+
+  // The activation this request starts, from ActorStatus.activation_id.
+  // Telemetry about the workload carries it as ate.actor.activation.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string activation_id = 15;
 }
 
 message RestoreWorkloadResponse {

@@ -235,7 +235,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 	updatedActor, _, err := w.store.UpdateActorAndRelease(ctx, actorRef, precondition, func(dbActor *ateapi.Actor) error {
 		clearLocalSnapshots(dbActor.Status)
 		dbActor.Status.AssignedNode = ""
-		dbActor.Status.WorkerAssignment = nil
+		clearWorkerAssignment(dbActor.Status)
 		return nil
 	})
 	if err != nil {

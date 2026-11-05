@@ -238,7 +238,7 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Wor
 	// assigned node stays, for the delete to reclaim the actor's state there.
 	if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_DELETING {
 		_, _, err := w.store.UpdateActorAndRelease(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
-			toUpdate.Status.WorkerAssignment = nil
+			clearWorkerAssignment(toUpdate.Status)
 			return nil
 		})
 		return releaseWriteError(name, err)
@@ -263,8 +263,8 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Wor
 			slog.String("worker", name))...)
 	_, _, err := w.store.UpdateActorAndRelease(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
-		toUpdate.Status.Crash = newActorCrash(opName, crashMsg)
-		toUpdate.Status.WorkerAssignment = nil
+		toUpdate.Status.Crash = newActorCrash(opName, crashMsg, toUpdate.Status.GetActivationId())
+		clearWorkerAssignment(toUpdate.Status)
 		return nil
 	})
 	if err != nil {

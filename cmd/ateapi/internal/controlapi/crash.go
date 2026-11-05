@@ -140,14 +140,14 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	if _, _, err := st.UpdateActorAndRelease(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
 		if !wasAlreadyCrashed {
-			toUpdate.Status.Crash = newActorCrash(opName, message)
+			toUpdate.Status.Crash = newActorCrash(opName, message, toUpdate.Status.GetActivationId())
 		}
 
 		// In-progress snapshot entries in Status.Snapshots are kept so a later
 		// DeleteActor or RevertActor can delete what they name: each is the only
 		// pointer to it, so clearing them here would leak the objects for good;
 		// failed workflow steps must never promote them to COMPLETED.
-		toUpdate.Status.WorkerAssignment = nil
+		clearWorkerAssignment(toUpdate.Status)
 		return nil
 	}); err != nil {
 		return fmt.Errorf("while marking actor crashed: %w", actorWriteError(actorRef, err))
@@ -161,15 +161,16 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	return nil
 }
 
-// newActorCrash records a crash that happens now, prefixing message with the
-// operation that failed when it is known.
-func newActorCrash(opName, message string) *ateapi.ActorCrash {
+// newActorCrash records a crash of activationID that happens now, prefixing
+// message with the operation that failed when it is known.
+func newActorCrash(opName, message, activationID string) *ateapi.ActorCrash {
 	if opName = ateattr.NormalizeOperationName(opName); opName != ateattr.OperationUnknown {
 		message = opName + " failed: " + message
 	}
 	return &ateapi.ActorCrash{
-		Message:   truncateUTF8(strings.ToValidUTF8(message, "�"), maxCrashMessageBytes),
-		CrashTime: timestamppb.Now(),
+		Message:      truncateUTF8(strings.ToValidUTF8(message, "�"), maxCrashMessageBytes),
+		CrashTime:    timestamppb.Now(),
+		ActivationId: activationID,
 	}
 }
 
@@ -192,4 +193,11 @@ func logActorCrashed(ctx context.Context, actor *ateapi.Actor, opName string) {
 type crashActorStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error)
 	UpdateActorAndRelease(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, *ateapi.Worker, error)
+}
+
+// clearWorkerAssignment unsets the Actor's worker assignment and its
+// activation, which never outlives the assignment.
+func clearWorkerAssignment(status *ateapi.ActorStatus) {
+	status.WorkerAssignment = nil
+	status.ActivationId = ""
 }

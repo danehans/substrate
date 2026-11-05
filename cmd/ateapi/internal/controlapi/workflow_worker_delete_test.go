@@ -114,7 +114,9 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	ctx := context.Background()
 	wf, persistence := newWorkerDeleteWorkflow(t)
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	const activation = "01JDQ5W2R3V6Z8B4N7K9M1P0XA"
 	actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING, func(a *ateapi.Actor) {
+		a.Status.ActivationId = activation
 		a.Status.LastAssignedGeneration = 2
 		a.Status.Snapshots = []*ateapi.Snapshot{
 			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "last", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
@@ -139,6 +141,12 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	}
 	if got.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("actor worker assignment = %v, want it cleared", got.GetStatus().GetWorkerAssignment())
+	}
+	if id := got.GetStatus().GetCrash().GetActivationId(); id != activation {
+		t.Errorf("crash activation_id = %q, want %q, the crashed activation", id, activation)
+	}
+	if id := got.GetStatus().GetActivationId(); id != "" {
+		t.Errorf("actor activation_id = %q, want it cleared with the worker assignment", id)
 	}
 	// The in-progress checkpoint is kept: it names the prefix whatever atelet
 	// already uploaded lives under, which delete or revert needs to collect it.
