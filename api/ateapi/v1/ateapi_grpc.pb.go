@@ -40,6 +40,8 @@ const (
 	Control_ResumeActor_FullMethodName                = "/substrate.ateapi.v1.Control/ResumeActor"
 	Control_RevertActor_FullMethodName                = "/substrate.ateapi.v1.Control/RevertActor"
 	Control_DeleteActor_FullMethodName                = "/substrate.ateapi.v1.Control/DeleteActor"
+	Control_HoldActor_FullMethodName                  = "/substrate.ateapi.v1.Control/HoldActor"
+	Control_ReleaseActorHold_FullMethodName           = "/substrate.ateapi.v1.Control/ReleaseActorHold"
 	Control_GetActorEgressPolicy_FullMethodName       = "/substrate.ateapi.v1.Control/GetActorEgressPolicy"
 	Control_CreateActorEgressPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/CreateActorEgressPolicy"
 	Control_UpdateActorEgressPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/UpdateActorEgressPolicy"
@@ -102,6 +104,12 @@ type ControlClient interface {
 	// Delete an actor. A running actor's workload is terminated, its volumes
 	// detached, and its worker released before the record is removed.
 	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
+	// Place the caller's hold on an actor. While the actor has any hold,
+	// ResumeActor and DeleteActor fail with FAILED_PRECONDITION. A hold does not
+	// stop a running actor, or keep it from being suspended or reverted.
+	HoldActor(ctx context.Context, in *HoldActorRequest, opts ...grpc.CallOption) (*HoldActorResponse, error)
+	// Release a hold the caller placed. Releasing does not resume the actor.
+	ReleaseActorHold(ctx context.Context, in *ReleaseActorHoldRequest, opts ...grpc.CallOption) (*ReleaseActorHoldResponse, error)
 	// Get the egress policy resource nested under an Actor.
 	GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
 	// Create the egress policy resource nested under an Actor.
@@ -269,6 +277,26 @@ func (c *controlClient) DeleteActor(ctx context.Context, in *DeleteActorRequest,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Actor)
 	err := c.cc.Invoke(ctx, Control_DeleteActor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) HoldActor(ctx context.Context, in *HoldActorRequest, opts ...grpc.CallOption) (*HoldActorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HoldActorResponse)
+	err := c.cc.Invoke(ctx, Control_HoldActor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ReleaseActorHold(ctx context.Context, in *ReleaseActorHoldRequest, opts ...grpc.CallOption) (*ReleaseActorHoldResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseActorHoldResponse)
+	err := c.cc.Invoke(ctx, Control_ReleaseActorHold_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -650,6 +678,12 @@ type ControlServer interface {
 	// Delete an actor. A running actor's workload is terminated, its volumes
 	// detached, and its worker released before the record is removed.
 	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
+	// Place the caller's hold on an actor. While the actor has any hold,
+	// ResumeActor and DeleteActor fail with FAILED_PRECONDITION. A hold does not
+	// stop a running actor, or keep it from being suspended or reverted.
+	HoldActor(context.Context, *HoldActorRequest) (*HoldActorResponse, error)
+	// Release a hold the caller placed. Releasing does not resume the actor.
+	ReleaseActorHold(context.Context, *ReleaseActorHoldRequest) (*ReleaseActorHoldResponse, error)
 	// Get the egress policy resource nested under an Actor.
 	GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error)
 	// Create the egress policy resource nested under an Actor.
@@ -773,6 +807,12 @@ func (UnimplementedControlServer) RevertActor(context.Context, *RevertActorReque
 }
 func (UnimplementedControlServer) DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteActor not implemented")
+}
+func (UnimplementedControlServer) HoldActor(context.Context, *HoldActorRequest) (*HoldActorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method HoldActor not implemented")
+}
+func (UnimplementedControlServer) ReleaseActorHold(context.Context, *ReleaseActorHoldRequest) (*ReleaseActorHoldResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseActorHold not implemented")
 }
 func (UnimplementedControlServer) GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActorEgressPolicy not implemented")
@@ -1022,6 +1062,42 @@ func _Control_DeleteActor_Handler(srv interface{}, ctx context.Context, dec func
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).DeleteActor(ctx, req.(*DeleteActorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_HoldActor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HoldActorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).HoldActor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_HoldActor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).HoldActor(ctx, req.(*HoldActorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ReleaseActorHold_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseActorHoldRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ReleaseActorHold(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ReleaseActorHold_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ReleaseActorHold(ctx, req.(*ReleaseActorHoldRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1690,6 +1766,14 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteActor",
 			Handler:    _Control_DeleteActor_Handler,
+		},
+		{
+			MethodName: "HoldActor",
+			Handler:    _Control_HoldActor_Handler,
+		},
+		{
+			MethodName: "ReleaseActorHold",
+			Handler:    _Control_ReleaseActorHold_Handler,
 		},
 		{
 			MethodName: "GetActorEgressPolicy",
