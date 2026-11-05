@@ -705,7 +705,7 @@ Activates a suspended actor by restoring it onto a physical worker.
     *   `actor`: `ObjectRef` of the actor to resume.
     *   `expected_uid`, `expected_activation`, `request_id`: (Optional) see [Conditional suspend and resume](#conditional-suspend-and-resume).
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment` and the activation in `status.activation_id`). Each resume that assigns a worker mints a new activation ID, a ULID. A retried resume of an actor left `ACTOR_STATE_RESUMING` gets a new one too, so no ID is sent to atelet twice. The ID is cleared with the worker assignment, and a crash records it in `status.crash.activation_id`.
-*   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`, or held; see [Actor holds](#actor-holds). When a suspended actor's node is deleted, resume restores its local snapshot on another node from the snapshot's upload, even if atelet never reported the upload complete. Resume does this once another node has room. If atelet finds no upload, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot. Revert deletes an upload that was never reported complete, so a snapshot is lost if its restore fails for another reason, or if the actor is reverted before it resumes.
+*   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`, held or quarantined; see [Actor holds](#actor-holds) and [Actor quarantine](#actor-quarantine). When a suspended actor's node is deleted, resume restores its local snapshot on another node from the snapshot's upload, even if atelet never reported the upload complete. Resume does this once another node has room. If atelet finds no upload, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot. Revert deletes an upload that was never reported complete, so a snapshot is lost if its restore fails for another reason, or if the actor is reverted before it resumes.
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
@@ -807,6 +807,32 @@ Hold and release receipts follow the rules of [Conditional suspend and resume](#
 Every ate-api-server replica must support holds before a client places one. A replica that predates them resumes and deletes held actors.
 
 Each hold placed and each hold released writes an `ate.actor.hold_changed` event with the caller, holder, reason, incident and request IDs. See `docs/metrics/registry/events.yaml`.
+
+#### Actor quarantine
+
+A quarantine is a hold with the holder `quarantine` that also cuts the actor's network and keeps its snapshots. An actor has at most one. [Actor quarantine](../guides/actor-quarantine.md) is the playbook: what stops at once, what can last up to a cache TTL, and what is out of scope.
+
+`QuarantineActor` quarantines an actor.
+*   **Request:** `QuarantineActorRequest`
+    *   `actor`: `ObjectRef` of the actor.
+    *   `reason`: why the actor is quarantined.
+    *   `incident_id`: (Optional) the incident the quarantine belongs to.
+    *   `expected_uid`, `expected_activation`: (Optional) as in [Conditional suspend and resume](#conditional-suspend-and-resume). They are checked in the write that places the quarantine, and the suspend stops only that activation.
+    *   `request_id`: names the quarantine, at most 120 characters.
+*   **Response:** `QuarantineActorResponse` containing the `Actor` and a `LifecycleReceipt` with the `caller`, `reason`, the quarantine `hold`, `quarantine`, the `activation_id` the call found, and `steps`.
+*   One write places the quarantine hold, sets `status.quarantine` and stores the receipt, with `QUARANTINE_STEP_HOLD` and `QUARANTINE_STEP_MARKED`. If the actor is `RUNNING`, ateapi then suspends that activation asynchronously, under `request_id` and `/suspend`, and replaces the receipt with one that adds `QUARANTINE_STEP_SUSPENDED` and the suspend's state, mode and `snapshot_durable`.
+*   If the suspend fails, the call returns its error and the quarantine stays. A retry with the same `request_id` continues the suspend. If the actor no longer holds the activation, the retry finishes the receipt with the actor's state and no `QUARANTINE_STEP_SUSPENDED`.
+*   A `REVERTING` actor returns `FAILED_PRECONDITION`: retry once the revert finishes. A retry continues an unfinished suspend only while the quarantine is in place.
+*   A retry returns the original receipt, including after the release, and does nothing else. A different caller, reason, incident or condition under the same `request_id` returns `ALREADY_EXISTS`, and so does a quarantine of an actor that is already quarantined under another `request_id`.
+
+`ReleaseQuarantine` releases the quarantine named by `quarantine_request_id`, with a `reason` and a `request_id`. It does not resume the actor. `transitioned` is false, and nothing changes, if the actor has no such quarantine. `ReleaseActorHold` can't release the quarantine hold: its holder is no caller.
+
+While an actor is quarantined:
+
+*   `ResumeActor` and `DeleteActor` fail as for a hold, with metadata `cause: ACTOR_QUARANTINED`. `RevertActor`, `CreateTag` from the actor, `MintActorJwt` and `GetActorEgressPolicy` fail the same way, and `MintWorkerActorCertificate` is refused with `FAILED_PRECONDITION`. Updating the egress policy works and does not lift the quarantine.
+*   A suspend keeps the snapshots it replaces in object storage.
+
+Each quarantine, each suspend it finishes, each release, and each resume it refuses before the resume writes anything, writes an `ate.actor.quarantine_changed` event. See `docs/metrics/registry/events.yaml`.
 
 #### `GetActor` / `ListActors`
 Query the state of logical actors.
