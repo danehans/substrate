@@ -41,10 +41,14 @@ const CauseActorHeld = "ACTOR_HELD"
 // during the restore. ResumeActor returns actorHeldError in its place.
 var errHeldAtWrite = errors.New("actor was held during its restore")
 
-// checkNotHeld fails with actorHeldError while actor has a hold.
+// checkNotHeld fails with actorHeldError while actor has a hold, or with
+// actorQuarantinedError if one of its holds is the quarantine.
 func checkNotHeld(actorRef resources.ActorRef, actor *ateapi.Actor) error {
 	if len(actor.GetStatus().GetHolds()) == 0 {
 		return nil
+	}
+	if actor.GetStatus().GetQuarantine() != nil {
+		return actorQuarantinedError(actorRef, "resume and delete")
 	}
 	return actorHeldError(actorRef)
 }

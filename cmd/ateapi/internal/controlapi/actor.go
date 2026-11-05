@@ -603,6 +603,10 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapi.MintActorJwtR
 	} else if err != nil {
 		return nil, fmt.Errorf("while retrieving actor: %w", err)
 	}
+	// The egress gateway injects these tokens into the actor's egress.
+	if err := checkNotQuarantined(resources.ActorRefFromActor(dbActor), dbActor, "minting an actor JWT"); err != nil {
+		return nil, err
+	}
 
 	// We only issue tokens with audience bindings.
 	if len(req.GetAudiences()) == 0 {

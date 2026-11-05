@@ -232,3 +232,59 @@ groups:
       - ref: ate.actor.activation
         requirement_level:
           conditionally_required: when the actor has an activation
+
+  - id: event.ate.actor.quarantine_changed
+    type: event
+    name: ate.actor.quarantine_changed
+    stability: development
+    brief: An actor was quarantined, suspended by its quarantine, or released, or its quarantine refused a resume.
+    note: >
+      ateapi writes one record when QuarantineActor places a quarantine, one
+      when it finishes suspending the quarantined activation, one when
+      ReleaseQuarantine releases it, and one for each ResumeActor the
+      quarantine refuses before the resume writes anything. A retry that
+      replays a receipt, and a release that finds no quarantine, write none.
+      ate.actor.activation is the activation the quarantine found, even
+      after the suspend cleared it.
+
+      The reason and the incident ID are the caller's text. Never sample or
+      filter this stream: it is the audit record of quarantines.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        code_anchor: cmd/ateapi/internal/controlapi/actor_quarantine.go
+        cuj: Who quarantined or released this actor, why, and what took effect?
+    attributes:
+      - ref: ate.atespace
+        requirement_level: required
+      - ref: ate.actor.name
+        requirement_level: required
+      - ref: ate.actor.uid
+        requirement_level: required
+      - ref: ate.template.atespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+      - ref: ate.actor.quarantine.action
+        requirement_level: required
+      - ref: ate.actor.quarantine.request_id
+        requirement_level: required
+      - ref: ate.actor.quarantine.reason
+        requirement_level: required
+      - ref: ate.actor.state
+        requirement_level: required
+      - ref: ate.actor.quarantine.caller
+        requirement_level:
+          conditionally_required: when the call has an authenticated caller
+      - ref: ate.actor.quarantine.incident_id
+        requirement_level:
+          conditionally_required: when the quarantine names an incident
+      - ref: ate.actor.quarantine.steps
+        requirement_level:
+          conditionally_required: when the action is quarantined or suspended
+      - ref: ate.actor.quarantine.release_request_id
+        requirement_level:
+          conditionally_required: when the action is released
+      - ref: ate.actor.activation
+        requirement_level:
+          conditionally_required: when the quarantine found an activation

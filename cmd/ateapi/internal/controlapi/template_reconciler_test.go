@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -752,6 +753,16 @@ func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
 // The template reconciler resumes golden actors without the authz
 // interceptor, so a hold must stop it in the resume workflow.
 func TestReconcileOne_HeldGoldenActorIsNotResumed(t *testing.T) {
+	for _, quarantine := range []bool{false, true} {
+		t.Run(fmt.Sprintf("quarantine=%t", quarantine), func(t *testing.T) {
+			testHeldGoldenActorIsNotResumed(t, quarantine)
+		})
+	}
+}
+
+// testHeldGoldenActorIsNotResumed holds the golden actor with HoldActor, or
+// with QuarantineActor if quarantine is set.
+func testHeldGoldenActorIsNotResumed(t *testing.T, quarantine bool) {
 	ctx := t.Context()
 	persistence := newTestPersistence(t)
 	impl := newServiceImpl(persistence, nil)
@@ -778,7 +789,11 @@ func TestReconcileOne_HeldGoldenActorIsNotResumed(t *testing.T) {
 	}
 	golden := &ateapi.ObjectRef{Atespace: tmpl.GetMetadata().GetAtespace(), Name: tmpl.GetMetadata().GetUid()}
 	holderCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "security", Kind: principal.KindJWT})
-	if _, err := svc.HoldActor(holderCtx, &ateapi.HoldActorRequest{Actor: golden, Reason: "poisoned image", RequestId: "hold-1"}); err != nil {
+	if quarantine {
+		if _, err := svc.QuarantineActor(holderCtx, &ateapi.QuarantineActorRequest{Actor: golden, Reason: "poisoned image", RequestId: "q-1"}); err != nil {
+			t.Fatalf("QuarantineActor: %v", err)
+		}
+	} else if _, err := svc.HoldActor(holderCtx, &ateapi.HoldActorRequest{Actor: golden, Reason: "poisoned image", RequestId: "hold-1"}); err != nil {
 		t.Fatalf("HoldActor: %v", err)
 	}
 

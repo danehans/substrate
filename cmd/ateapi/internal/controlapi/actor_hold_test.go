@@ -38,6 +38,20 @@ func placeTestHold(t *testing.T, ctx context.Context, st store.Interface, actorR
 	}
 }
 
+func placeTestQuarantine(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
+	t.Helper()
+	if _, _, err := st.PlaceActorHold(ctx, actorRef, func(*ateapi.Actor) error { return nil }, func(stored *ateapi.Actor) *ateapi.LifecycleReceipt {
+		return &ateapi.LifecycleReceipt{
+			RequestId:  "q-1",
+			ActorUid:   stored.GetMetadata().GetUid(),
+			Hold:       &ateapi.ActorHold{Holder: store.QuarantineHolder, RequestId: "q-1"},
+			Quarantine: &ateapi.ActorQuarantine{RequestId: "q-1", Caller: "user:security"},
+		}
+	}); err != nil {
+		t.Fatalf("PlaceActorHold: %v", err)
+	}
+}
+
 // A hold placed after the resume read the actor is refused by the write that
 // marks it RESUMING, and the worker claim made for that write is released.
 func TestEnsureWorkerAssigned_HeldAfterRead(t *testing.T) {

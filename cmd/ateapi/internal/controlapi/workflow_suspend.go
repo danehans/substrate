@@ -535,8 +535,15 @@ func ateletKeptLocal(state *ateletpb.ActorSnapshotState, snap *ateapi.Snapshot) 
 // as COMPLETED and after doesn't. A failure is only logged, and leaves the
 // snapshot's objects in storage until the actor is deleted, which removes its
 // whole prefix. An upload atelet reports can make a newer snapshot COMPLETED
-// outside any workflow, so the next one can drop more than one.
+// outside any workflow, so the next one can drop more than one. A quarantined
+// actor's snapshots are evidence, so none is released while it is
+// quarantined; deleting the actor after the release removes them.
 func (w *ActorWorkflow) releaseDroppedSnapshots(ctx context.Context, before, after *ateapi.Actor) {
+	if before.GetStatus().GetQuarantine() != nil || after.GetStatus().GetQuarantine() != nil {
+		slog.InfoContext(ctx, "Keeping the external snapshots a quarantined actor no longer records",
+			slog.Any("actor", resources.ActorRefFromActor(after)))
+		return
+	}
 	completed := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 	kept := map[string]bool{}
 	for _, snap := range after.GetStatus().GetSnapshots() {
