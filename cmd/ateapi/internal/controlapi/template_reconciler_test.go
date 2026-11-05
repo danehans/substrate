@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/principal"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
@@ -745,6 +746,57 @@ func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The template reconciler resumes golden actors without the authz
+// interceptor, so a hold must stop it in the resume workflow.
+func TestReconcileOne_HeldGoldenActorIsNotResumed(t *testing.T) {
+	ctx := t.Context()
+	persistence := newTestPersistence(t)
+	impl := newServiceImpl(persistence, nil)
+	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
+	w, atelet := newWireCaptureWorkflow(t, persistence)
+	svc := &RPCService{impl: impl, actorWorkflow: w}
+	storetest.MustCreateAtespace(t, ctx, persistence, "templates")
+	tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+		tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "templates", Name: "tmpl"}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The first pass creates the golden actor and stops at its resume.
+	stop := errors.New("stop before resuming")
+	control := &goldenEgressControl{RPCService: svc, resume: func(context.Context, *ateapi.ResumeActorRequest) (*ateapi.ResumeActorResponse, error) {
+		return nil, stop
+	}}
+	r := newTestTemplateReconciler(persistence, control)
+	defer r.queue.ShutDown()
+	if _, err := r.reconcileOne(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl)); !errors.Is(err, stop) {
+		t.Fatalf("first reconcile = %v, want to reach resume", err)
+	}
+	golden := &ateapi.ObjectRef{Atespace: tmpl.GetMetadata().GetAtespace(), Name: tmpl.GetMetadata().GetUid()}
+	holderCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "security", Kind: principal.KindJWT})
+	if _, err := svc.HoldActor(holderCtx, &ateapi.HoldActorRequest{Actor: golden, Reason: "poisoned image", RequestId: "hold-1"}); err != nil {
+		t.Fatalf("HoldActor: %v", err)
+	}
+
+	control.resume = svc.ResumeActor
+	if _, err := r.reconcileOne(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl)); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("reconcile of a held golden actor = %v, want FailedPrecondition", err)
+	}
+	stored, err := persistence.GetActor(ctx, resources.ActorRefFromObjectRef(golden))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("golden actor state = %v, want SUSPENDED", got)
+	}
+	atelet.mu.Lock()
+	defer atelet.mu.Unlock()
+	if atelet.run != nil || atelet.restore != nil {
+		t.Errorf("atelet was asked to run or restore a held golden actor")
 	}
 }
 

@@ -31,13 +31,24 @@ import (
 	"errors"
 	"fmt"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
+// Domain is the ErrorInfo domain of the reasons below.
+const Domain = "ate.dev"
+
+// ReasonTerminalState is the ErrorInfo reason of a FailedPrecondition that
+// retrying cannot clear until a caller changes the resource. The ingress
+// router returns it at once instead of parking the request.
+const ReasonTerminalState = "TERMINAL_STATE"
+
 type apiError struct {
 	code codes.Code
 	err  error
+	// info, if set, is sent as the status's one detail.
+	info *errdetails.ErrorInfo
 }
 
 func (e *apiError) Error() string { return e.err.Error() }
@@ -68,6 +79,17 @@ func AlreadyExists(format string, args ...any) error {
 // requires. Retrying is pointless until that state changes.
 func FailedPrecondition(format string, args ...any) error {
 	return newf(codes.FailedPrecondition, format, args...)
+}
+
+// FailedPreconditionWithInfo is FailedPrecondition with an ErrorInfo of
+// Domain, reason and metadata, so a client can act on reason without parsing
+// the message.
+func FailedPreconditionWithInfo(reason string, metadata map[string]string, format string, args ...any) error {
+	return &apiError{
+		code: codes.FailedPrecondition,
+		err:  fmt.Errorf(format, args...),
+		info: &errdetails.ErrorInfo{Domain: Domain, Reason: reason, Metadata: metadata},
+	}
 }
 
 // Aborted reports a request that lost a concurrency conflict, such as a
@@ -135,7 +157,15 @@ func FromError(err error) (s *status.Status, ok bool) {
 	}
 	var apiErr *apiError
 	if errors.As(err, &apiErr) {
-		return status.New(apiErr.code, apiErr.Error()), true
+		s := status.New(apiErr.code, apiErr.Error())
+		if apiErr.info != nil {
+			withInfo, err := s.WithDetails(apiErr.info)
+			if err != nil {
+				return status.New(codes.Internal, fmt.Sprintf("attaching ErrorInfo to %q: %v", apiErr.Error(), err)), false
+			}
+			s = withInfo
+		}
+		return s, true
 	}
 	if s := status.FromContextError(err); s.Code() != codes.Unknown {
 		return s, true

@@ -705,7 +705,7 @@ Activates a suspended actor by restoring it onto a physical worker.
     *   `actor`: `ObjectRef` of the actor to resume.
     *   `expected_uid`, `expected_activation`, `request_id`: (Optional) see [Conditional suspend and resume](#conditional-suspend-and-resume).
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment` and the activation in `status.activation_id`). Each resume that assigns a worker mints a new activation ID, a ULID. A retried resume of an actor left `ACTOR_STATE_RESUMING` gets a new one too, so no ID is sent to atelet twice. The ID is cleared with the worker assignment, and a crash records it in `status.crash.activation_id`.
-*   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`. When a suspended actor's node is deleted, resume restores its local snapshot on another node from the snapshot's upload, even if atelet never reported the upload complete. Resume does this once another node has room. If atelet finds no upload, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot. Revert deletes an upload that was never reported complete, so a snapshot is lost if its restore fails for another reason, or if the actor is reverted before it resumes.
+*   **Errors:** `RESOURCE_EXHAUSTED` if no eligible worker has room. `FAILED_PRECONDITION` if the actor is `ACTOR_STATE_CRASHED`, or held; see [Actor holds](#actor-holds). When a suspended actor's node is deleted, resume restores its local snapshot on another node from the snapshot's upload, even if atelet never reported the upload complete. Resume does this once another node has room. If atelet finds no upload, resume moves the actor to `ACTOR_STATE_CRASHED` and returns `FAILED_PRECONDITION`. `RevertActor` then returns it to its last completed external snapshot. Revert deletes an upload that was never reported complete, so a snapshot is lost if its restore fails for another reason, or if the actor is reverted before it resumes.
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
@@ -768,6 +768,45 @@ Removes an actor in any state from the registry and cleans up associated resourc
     *   `options`: (Optional) `DeleteOptions`. `uid` and `version` are preconditions checked against the actor as the caller last read it: a mismatch returns `ABORTED`, an omitted guard is skipped. They are checked before the workflow starts, so a guarded delete that fails part-way leaves the actor `ACTOR_STATE_DELETING` at a higher version. Retry it with the `uid` guard alone, or re-read first. `expected_activation` deletes the actor only while `status.activation_id` is this one; a mismatch returns `FAILED_PRECONDITION` and changes nothing. It is checked in the write that marks the actor `ACTOR_STATE_DELETING`, so an actor already deleting is not checked. Other deletes reject `expected_activation` with `INVALID_ARGUMENT`.
 *   **Response:** the deleted `Actor`, as it was immediately before removal.
 *   Deleting an actor also deletes the external snapshot it owns, along with one an interrupted suspend left behind. Snapshots it only borrows from a tag are left alone, and its tags are unaffected — they hold their own copies.
+*   A held actor is refused with `FAILED_PRECONDITION` and is not changed. See [Actor holds](#actor-holds).
+
+#### Actor holds
+
+A hold keeps an actor from being resumed or deleted until its holder releases it. Each holder has at most one hold on an actor, no two holds on an actor share a `request_id`, and an actor has at most 16 holds. `status.holds` lists them, with their holders, reasons and incident IDs, to every viewer of the actor.
+
+`HoldActor` places the caller's hold.
+*   **Request:** `HoldActorRequest`
+    *   `actor`: `ObjectRef` of the actor to hold.
+    *   `reason`: why the actor is held.
+    *   `incident_id`: (Optional) the incident the hold belongs to.
+    *   `expected_uid`, `expected_activation`: (Optional) as in [Conditional suspend and resume](#conditional-suspend-and-resume). They are checked in the write that places the hold.
+    *   `request_id`: names the hold.
+*   **Response:** `HoldActorResponse` containing the held `Actor` and a `LifecycleReceipt` whose `hold` records the holder, reason, incident, conditions and request.
+*   The holder is `user:` and the authenticated caller's ID, as AccessPolicy members name it, for example `user:spiffe://cluster.local/ns/sec/sa/controller`.
+*   A hold does not stop a running actor. Suspend it with `expected_activation` from the receipt to stop that run.
+*   A second hold by the same caller, with another `request_id`, returns `ALREADY_EXISTS`. So does a `request_id` that another hold on the actor has, or that the caller or another caller used for another call. A hold on an actor being deleted returns `FAILED_PRECONDITION`.
+
+`ReleaseActorHold` releases a hold the caller placed. Releasing does not resume the actor.
+*   **Request:** `ReleaseActorHoldRequest`
+    *   `actor`: `ObjectRef` of the actor.
+    *   `hold_request_id`: the `request_id` of the hold to release.
+    *   `expected_uid`: (Optional) releases only on the actor with this uid.
+    *   `request_id`: makes the call idempotent.
+*   **Response:** `ReleaseActorHoldResponse` containing the `Actor` and a receipt. `transitioned` is false, and nothing changes, if the caller has no hold with `hold_request_id`. A retry of an old release never releases a later hold placed under another `request_id`.
+*   A hold that another principal placed is refused with `PERMISSION_DENIED`. No role can release another principal's hold, so a hold whose holder can no longer call ateapi stays until the row is removed from the database.
+
+While an actor has a hold:
+
+*   `ResumeActor` returns `FAILED_PRECONDITION` with an `ErrorInfo` of domain `ate.dev`, reason `TERMINAL_STATE` and metadata `cause: ACTOR_HELD`, whether the actor is `SUSPENDED` or `RUNNING`. The ingress router returns that error at once and does not park the request. ateapi checks the hold under the actor's lease, and again in the writes that mark the actor `RESUMING` and `RUNNING`, so the template reconciler and every other caller are refused too. A resume refused by a hold stores no receipt.
+*   A hold placed during a restore stops the resume before `RUNNING`. ateapi terminates the restored workload and leaves the actor `ACTOR_STATE_RESUMING`, with its worker booked. Each resume the hold refuses sends the terminate again, so a failed one is retried. A resume after the last release restores the actor again under a new activation.
+*   `DeleteActor` returns the same error and changes nothing, so delete does not remove the actor's snapshots. The store also refuses to remove the row of a held actor. Its atespace can't be deleted either, and neither can its template if it is the template's golden actor.
+*   Suspend, revert and snapshot uploads work as usual and keep the holds. A suspend replaces the actor's snapshot and a revert rolls it back, so a hold doesn't freeze the snapshot.
+
+Hold and release receipts follow the rules of [Conditional suspend and resume](#conditional-suspend-and-resume), and the `request_id` space is shared with suspend and resume calls on the same actor name. A hold's receipt is also returned while the hold exists, and for 24 hours after the release. An actor created under the name of a deleted one has no holds, and a retried hold returns the original receipt without holding it.
+
+Every ate-api-server replica must support holds before a client places one. A replica that predates them resumes and deletes held actors.
+
+Each hold placed and each hold released writes an `ate.actor.hold_changed` event with the caller, holder, reason, incident and request IDs. See `docs/metrics/registry/events.yaml`.
 
 #### `GetActor` / `ListActors`
 Query the state of logical actors.

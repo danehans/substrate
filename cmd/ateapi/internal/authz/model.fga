@@ -41,7 +41,9 @@ type worker
 type global
   relations
     define owner: [user]
-    define viewer: [user] or owner
+    # Places and releases holds on actors in every atespace, and reads them.
+    define hold_manager: [user]
+    define viewer: [user] or owner or hold_manager
 
     # --- System Component Roles ---
     # Held only by Substrate's own components, through contextual tuples that
@@ -78,7 +80,10 @@ type atespace
     # Global owner automatically inherits owner without explicit per-atespace tuples
     define owner: [user] or owner from parent_global
     define editor: [user] or owner
-    define viewer: [user] or editor or viewer from parent_global
+    # Places and releases holds on the atespace's actors, and reads them.
+    # Editor does not imply it.
+    define hold_manager: [user] or hold_manager from parent_global
+    define viewer: [user] or editor or hold_manager or viewer from parent_global
 
     # System component roles, inherited from global only.
     define egress_gateway: egress_gateway from parent_global
@@ -176,3 +181,9 @@ type actor
     # Lifecycle Operations
     define can_suspend: [user] or editor from parent_atespace
     define can_revert: [user] or editor from parent_atespace
+
+    # Holds block resume and delete. Neither relation comes from editor, so
+    # an actor's editors cannot hold it or release a hold. ateapi also lets
+    # only a hold's holder release it.
+    define can_hold: owner from parent_atespace or hold_manager from parent_atespace
+    define can_release_hold: owner from parent_atespace or hold_manager from parent_atespace

@@ -181,6 +181,57 @@ groups:
                 crashes because its worker is lost, or the operation is not in
                 this list. This is the default value.
 
+  - id: registry.ate.actor.hold
+    type: attribute_group
+    brief: >
+      A hold on an actor, from HoldActor or ReleaseActorHold. Logs only, by the
+      cardinality rule no-actor-identity in docs/metrics/substrate.yaml: every
+      value but the action comes from a request or its caller.
+    attributes:
+      - id: ate.actor.hold.action
+        stability: development
+        brief: What the call did to the hold.
+        type:
+          members:
+            - id: placed
+              stability: development
+              value: placed
+              brief: HoldActor placed the hold.
+            - id: released
+              stability: development
+              value: released
+              brief: ReleaseActorHold released the hold.
+      - id: ate.actor.hold.holder
+        stability: development
+        type: string
+        brief: The principal that placed the hold, ActorHold.holder.
+        examples: ["user:spiffe://cluster.local/ns/sec/sa/controller"]
+      - id: ate.actor.hold.caller
+        stability: development
+        type: string
+        brief: The authenticated principal that made the call.
+        examples: ["user:spiffe://cluster.local/ns/sec/sa/controller"]
+      - id: ate.actor.hold.reason
+        stability: development
+        type: string
+        brief: The reason HoldActor gave for the hold.
+        examples: [exfiltration attempt blocked by egress policy]
+      - id: ate.actor.hold.incident_id
+        stability: development
+        type: string
+        brief: The incident HoldActor named, if any.
+        examples: [INC-1042]
+      - id: ate.actor.hold.request_id
+        stability: development
+        type: string
+        brief: The request_id of the HoldActor call, which names the hold.
+        examples: [incident-1042/hold]
+      - id: ate.actor.hold.release_request_id
+        stability: development
+        type: string
+        brief: The request_id of the ReleaseActorHold call.
+        examples: [incident-1042/release]
+
   - id: registry.ate.template
     type: attribute_group
     brief: >

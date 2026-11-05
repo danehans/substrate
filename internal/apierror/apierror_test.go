@@ -20,8 +20,10 @@ import (
 	"fmt"
 	"testing"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestConstructors(t *testing.T) {
@@ -207,5 +209,21 @@ func TestNotAGRPCStatus(t *testing.T) {
 	err := fmt.Errorf("while reading tier 1: %w", NotFound("tier 1 not found"))
 	if s, ok := status.FromError(err); ok || s.Code() != codes.Unknown {
 		t.Errorf("status.FromError() = %v, %v, want Unknown, false", s.Code(), ok)
+	}
+}
+
+func TestFailedPreconditionWithInfo(t *testing.T) {
+	err := fmt.Errorf("while resuming: %w", FailedPreconditionWithInfo(ReasonTerminalState, map[string]string{"cause": "ACTOR_HELD"}, "actor %s is held", "a/b"))
+	s, ok := FromError(err)
+	if !ok || s.Code() != codes.FailedPrecondition || s.Message() != "actor a/b is held" {
+		t.Fatalf("FromError() = %v, %v, want FailedPrecondition %q", s, ok, "actor a/b is held")
+	}
+	want := &errdetails.ErrorInfo{Domain: Domain, Reason: ReasonTerminalState, Metadata: map[string]string{"cause": "ACTOR_HELD"}}
+	details := s.Details()
+	if len(details) != 1 {
+		t.Fatalf("Details() = %v, want one ErrorInfo", details)
+	}
+	if got, ok := details[0].(*errdetails.ErrorInfo); !ok || !proto.Equal(got, want) {
+		t.Errorf("Details()[0] = %v, want %v", details[0], want)
 	}
 }
