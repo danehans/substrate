@@ -143,7 +143,7 @@ integration. `quarantine_admin` also grants releasing quarantines and reading
 the stored egress policy of a quarantined actor. No owner or editor can release
 a quarantine or use that read without the role.
 An owner can still grant it to themselves through an access policy. See
-[actor quarantine](../reference/api-guide.md#actor-quarantine).
+[actor quarantine](actor-quarantine.md).
 
 ### System roles
 

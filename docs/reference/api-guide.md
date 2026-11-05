@@ -869,7 +869,7 @@ Each hold placed and each hold released writes an `ate.actor.hold_changed` event
 
 #### Actor quarantine
 
-A quarantine is a hold with the holder `quarantine` that restricts lifecycle and credential operations and keeps snapshots. An actor has at most one. These downstream controls are experimental, unqualified, and development only. Every control-plane replica must implement them before use; mixed unpatched writers can discard the state or bypass the restrictions. This API does not by itself guarantee revocation of existing network connections.
+A quarantine is a hold with the holder `quarantine` that restricts lifecycle and credential operations and keeps snapshots. An actor has at most one. These downstream controls are experimental, unqualified, and development only. Every control-plane replica must implement them before use; mixed unpatched writers can discard the state or bypass the restrictions. This API does not by itself guarantee revocation of existing network connections. See the [quarantine guide](../guides/actor-quarantine.md) for network behavior and limits.
 
 `QuarantineActor` quarantines an actor.
 *   **Request:** `QuarantineActorRequest`
