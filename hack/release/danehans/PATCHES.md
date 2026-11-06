@@ -55,8 +55,11 @@ names its upstream proposal and the condition that retires it.
 
 3. **Actor quarantine.** `QuarantineActor` places a hold with the holder
    `quarantine` and sets `ActorStatus.quarantine` in one write, then suspends
-   a `RUNNING` actor at the expected activation. While quarantined, ateapi
-   refuses resume, delete, revert and tagging, refuses worker-for-actor
+   a `RUNNING` actor at the expected activation. A failed suspend falls back
+   to termination of that activation. A retry finishes a failed termination;
+   release prevents later retries from terminating it. Termination discards
+   memory state, and the next resume uses the last durable snapshot. While
+   quarantined, ateapi refuses resume, delete, revert and tagging, refuses worker-for-actor
    certificates and actor JWTs, keeps replaced snapshots, and fails
    `GetActorEgressPolicy`, which agentgateway denies on for every request and
    TLS handshake. atenet refuses new tunnels. `ReleaseQuarantine` takes the

@@ -821,7 +821,8 @@ A quarantine is a hold with the holder `quarantine` that also cuts the actor's n
     *   `request_id`: names the quarantine, at most 120 characters.
 *   **Response:** `QuarantineActorResponse` containing the `Actor` and a `LifecycleReceipt` with the `caller`, `reason`, the quarantine `hold`, `quarantine`, the `activation_id` the call found, and `steps`.
 *   One write places the quarantine hold, sets `status.quarantine` and stores the receipt, with `QUARANTINE_STEP_HOLD` and `QUARANTINE_STEP_MARKED`. If the actor is `RUNNING`, ateapi then suspends that activation asynchronously, under `request_id` and `/suspend`, and replaces the receipt with one that adds `QUARANTINE_STEP_SUSPENDED` and the suspend's state, mode and `snapshot_durable`.
-*   If the suspend fails, the call returns its error and the quarantine stays. A retry with the same `request_id` continues the suspend. If the actor no longer holds the activation, the retry finishes the receipt with the actor's state and no `QUARANTINE_STEP_SUSPENDED`.
+*   If the suspend fails while the activation remains assigned, ateapi terminates that workload. This discards its memory state and closes its egress tunnels. The receipt adds `QUARANTINE_STEP_TERMINATED` and the actor becomes `SUSPENDED`. A failed termination leaves `terminate_pending` in the receipt; a retry with the same `request_id` continues termination. After release, the next resume restores the last completed durable snapshot under a new activation. If no durable snapshot exists, it starts from the template.
+*   If the workload stops but the final receipt cannot be stored, a retry returns `ABORTED` with an unknown outcome and keeps `terminate_pending`. A missing Node object does not count as confirmed termination.
 *   A `REVERTING` actor returns `FAILED_PRECONDITION`: retry once the revert finishes. A retry continues an unfinished suspend only while the quarantine is in place.
 *   A retry returns the original receipt, including after the release, and does nothing else. A different caller, reason, incident or condition under the same `request_id` returns `ALREADY_EXISTS`, and so does a quarantine of an actor that is already quarantined under another `request_id`.
 
@@ -832,7 +833,7 @@ While an actor is quarantined:
 *   `ResumeActor` and `DeleteActor` fail as for a hold, with metadata `cause: ACTOR_QUARANTINED`. `RevertActor`, `CreateTag` from the actor, `MintActorJwt` and `GetActorEgressPolicy` fail the same way, and `MintWorkerActorCertificate` is refused with `FAILED_PRECONDITION`. Updating the egress policy works and does not lift the quarantine, but needs the policy's `uid` and `version` from a read made before the quarantine.
 *   A suspend keeps the snapshots it replaces in object storage.
 
-Each quarantine, each suspend it finishes, each release, and each resume it refuses before the resume writes anything, writes an `ate.actor.quarantine_changed` event. See `docs/metrics/registry/events.yaml`.
+Each quarantine, each suspend or terminate it finishes, each release, and each resume it refuses before the resume writes anything, writes an `ate.actor.quarantine_changed` event. See `docs/metrics/registry/events.yaml`.
 
 #### `GetActor` / `ListActors`
 Query the state of logical actors.

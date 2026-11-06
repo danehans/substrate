@@ -61,8 +61,9 @@ func actorQuarantinedError(actorRef resources.ActorRef, doing string) error {
 // QuarantineActor quarantines an Actor. The first write places the
 // quarantine hold, sets status.quarantine and stores the receipt. A RUNNING
 // Actor is then suspended at the activation it held, and the receipt is
-// replaced with one that adds QUARANTINE_STEP_SUSPENDED. A retry continues
-// an unfinished suspend.
+// replaced with one that adds QUARANTINE_STEP_SUSPENDED. If suspend fails,
+// termination discards the execution and restores from the last durable
+// snapshot on the next resume. A retry finishes the pending step.
 func (s *RPCService) QuarantineActor(ctx context.Context, req *ateapi.QuarantineActorRequest) (*ateapi.QuarantineActorResponse, error) {
 	if errs := apivalidation.ValidateQuarantineActorRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
@@ -107,10 +108,10 @@ func (s *RPCService) QuarantineActor(ctx context.Context, req *ateapi.Quarantine
 			return nil, err
 		}
 	}
-	if !quarantineSuspendPending(receipt) {
+	if !quarantineSuspendPending(receipt) && !receipt.GetTerminatePending() {
 		return &ateapi.QuarantineActorResponse{Actor: actor, Receipt: receipt}, nil
 	}
-	// A retry continues the suspend only while its quarantine is in place.
+	// A retry continues a stop only while its quarantine is in place.
 	if actor == nil {
 		current, err := s.impl.GetActor(ctx, actorRef)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -120,14 +121,74 @@ func (s *RPCService) QuarantineActor(ctx context.Context, req *ateapi.Quarantine
 			return &ateapi.QuarantineActorResponse{Receipt: receipt}, nil
 		}
 	}
+	if receipt.GetTerminatePending() {
+		terminated, final, err := s.finishQuarantineTerminate(ctx, actorRef, receipt)
+		if err != nil {
+			return nil, err
+		}
+		return &ateapi.QuarantineActorResponse{Actor: terminated, Receipt: final}, nil
+	}
 	suspended, final, err := s.finishQuarantineSuspend(ctx, actorRef, receipt)
 	if err != nil {
-		return nil, err
+		pending, markErr := s.markQuarantineTerminatePending(ctx, actorRef, receipt)
+		if markErr != nil {
+			return nil, markErr
+		}
+		if !pending.GetTerminatePending() {
+			if slices.Contains(pending.GetSteps(), ateapi.QuarantineStep_QUARANTINE_STEP_SUSPENDED) ||
+				slices.Contains(pending.GetSteps(), ateapi.QuarantineStep_QUARANTINE_STEP_TERMINATED) {
+				return &ateapi.QuarantineActorResponse{Receipt: pending}, nil
+			}
+			return nil, err
+		}
+		terminated, final, terminateErr := s.finishQuarantineTerminate(ctx, actorRef, pending)
+		if terminateErr != nil {
+			return nil, terminateErr
+		}
+		return &ateapi.QuarantineActorResponse{Actor: terminated, Receipt: final}, nil
 	}
 	if suspended != nil {
 		setSpanActorAttributes(ctx, suspended)
 	}
 	return &ateapi.QuarantineActorResponse{Actor: suspended, Receipt: final}, nil
+}
+
+// markQuarantineTerminatePending keeps a concurrent successful stop from
+// being overwritten by an older failed suspend response.
+func (s *RPCService) markQuarantineTerminatePending(ctx context.Context, actorRef resources.ActorRef, r *ateapi.LifecycleReceipt) (*ateapi.LifecycleReceipt, error) {
+	leaseCtx, lease, err := s.actorWorkflow.acquireActorLease(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
+	stored, err := s.storedQuarantine(leaseCtx, actorRef, r)
+	if err != nil {
+		return nil, err
+	}
+	if stored == nil {
+		return r, nil
+	}
+	if stored.GetTerminatePending() || slices.Contains(stored.GetSteps(), ateapi.QuarantineStep_QUARANTINE_STEP_SUSPENDED) ||
+		slices.Contains(stored.GetSteps(), ateapi.QuarantineStep_QUARANTINE_STEP_TERMINATED) {
+		return stored, nil
+	}
+	actor, err := s.impl.GetActor(leaseCtx, actorRef)
+	if errors.Is(err, store.ErrNotFound) {
+		return stored, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if actor.GetMetadata().GetUid() != r.GetActorUid() || actor.GetStatus().GetActivationId() != r.GetActivationId() ||
+		actor.GetStatus().GetQuarantine().GetRequestId() != r.GetRequestId() {
+		return stored, nil
+	}
+	pending := proto.CloneOf(stored)
+	pending.TerminatePending = true
+	if err := s.impl.ReplaceActorHoldReceipt(leaseCtx, actorRef, pending); err != nil {
+		return nil, err
+	}
+	return pending, nil
 }
 
 // placeQuarantine places the quarantine hold, sets status.quarantine and
@@ -189,7 +250,7 @@ func (s *RPCService) placeQuarantine(ctx context.Context, actorRef resources.Act
 // quarantineSuspendPending reports whether the quarantine r records found
 // the Actor RUNNING and has not recorded its suspend.
 func quarantineSuspendPending(r *ateapi.LifecycleReceipt) bool {
-	return r.GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING && r.GetActivationId() != "" &&
+	return !r.GetTerminatePending() && r.GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING && r.GetActivationId() != "" &&
 		!slices.Contains(r.GetSteps(), ateapi.QuarantineStep_QUARANTINE_STEP_SUSPENDED)
 }
 
@@ -203,7 +264,7 @@ func quarantineSuspendPending(r *ateapi.LifecycleReceipt) bool {
 func (s *RPCService) finishQuarantineSuspend(ctx context.Context, actorRef resources.ActorRef, r *ateapi.LifecycleReceipt) (*ateapi.Actor, *ateapi.LifecycleReceipt, error) {
 	cond := lifecycleConditions{expectedUID: r.GetActorUid(), expectedActivation: r.GetActivationId(), requestID: r.GetSuspendRequestId()}
 	final := proto.CloneOf(r)
-	actor, suspend, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendAsync, cond)
+	actor, suspend, err := s.actorWorkflow.suspendActor(ctx, actorRef, suspendAsync, cond, true)
 	// A replayed receipt of a suspend that never finished is in SUSPENDING.
 	if err == nil && suspend.GetTransitioned() && suspend.GetActivationId() == r.GetActivationId() &&
 		suspend.GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED {
@@ -236,6 +297,115 @@ func (s *RPCService) finishQuarantineSuspend(ctx context.Context, actorRef resou
 		logQuarantineChanged(ctx, actor, ateattr.QuarantineActionSuspended, final, "")
 	}
 	return actor, final, nil
+}
+
+// finishQuarantineTerminate discards the activation whose checkpoint failed.
+// The lease fences release, and the write checks the receipt's target before
+// atelet is called. A failed termination leaves terminate_pending for retry.
+func (s *RPCService) finishQuarantineTerminate(ctx context.Context, actorRef resources.ActorRef, r *ateapi.LifecycleReceipt) (*ateapi.Actor, *ateapi.LifecycleReceipt, error) {
+	w := s.actorWorkflow
+	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer lease.Close()
+	stored, err := s.storedQuarantine(leaseCtx, actorRef, r)
+	if err != nil {
+		return nil, nil, err
+	}
+	if stored == nil {
+		return nil, r, nil
+	}
+	if !stored.GetTerminatePending() {
+		return nil, stored, nil
+	}
+	r = stored
+
+	actor, err := w.store.GetActor(leaseCtx, actorRef)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, r, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if actor.GetMetadata().GetUid() != r.GetActorUid() || actor.GetStatus().GetQuarantine().GetRequestId() != r.GetRequestId() {
+		return nil, r, nil
+	}
+	if actor.GetStatus().GetActivationId() != r.GetActivationId() {
+		if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+			return nil, nil, apierror.Aborted("termination outcome for Actor %s is unknown; receipt still pending", actorRef)
+		}
+		final := proto.CloneOf(r)
+		final.TerminatePending = false
+		final.State = actor.GetStatus().GetState()
+		if err := s.impl.ReplaceActorHoldReceipt(leaseCtx, actorRef, final); err != nil {
+			return nil, nil, err
+		}
+		return nil, final, nil
+	}
+	// This update must commit before Terminate. It checks the current UID,
+	// activation and quarantine under the store's write lock.
+	actor, err = w.store.UpdateActor(leaseCtx, actorRef, store.PreconditionFrom(actor), func(current *ateapi.Actor) error {
+		if current.GetMetadata().GetUid() != r.GetActorUid() || current.GetStatus().GetActivationId() != r.GetActivationId() ||
+			current.GetStatus().GetQuarantine().GetRequestId() != r.GetRequestId() {
+			return apierror.FailedPrecondition("Actor %s no longer holds the quarantined activation", actorRef)
+		}
+		if current.GetStatus().GetAssignedNode() == "" {
+			return apierror.FailedPrecondition("Actor %s has no node to terminate", actorRef)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	template, err := resolveActorTemplate(leaseCtx, w.store, actor)
+	if errors.Is(err, errActorTemplateNotFound) {
+		template, err = nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := w.ensureAteletTerminatedForQuarantine(leaseCtx, actorRef, actor, template); err != nil {
+		return nil, nil, err
+	}
+	if err := w.ensureVolumesDetached(leaseCtx, actor, template, "DetachVolumesForQuarantine", ateattr.OperationSuspend); err != nil {
+		return nil, nil, err
+	}
+	if err := w.ensureInProgressSnapshotDiscarded(leaseCtx, actor); err != nil {
+		return nil, nil, err
+	}
+	if actor.GetStatus().GetWorkerAssignment() != nil {
+		if _, err := releaseWorker(leaseCtx, w.store, actor); err != nil {
+			return nil, nil, err
+		}
+	}
+	stopped, err := w.store.UpdateActor(leaseCtx, actorRef, store.PreconditionFrom(actor), func(current *ateapi.Actor) error {
+		if current.GetMetadata().GetUid() != r.GetActorUid() || current.GetStatus().GetActivationId() != r.GetActivationId() ||
+			current.GetStatus().GetQuarantine().GetRequestId() != r.GetRequestId() {
+			return apierror.FailedPrecondition("Actor %s no longer holds the quarantined activation", actorRef)
+		}
+		current.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+		clearWorkerAssignment(current.Status)
+		current.Status.AssignedNode = ""
+		pruneSnapshots(current.Status, nil)
+		current.Status.Crash = nil
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	w.releaseDroppedSnapshots(leaseCtx, actor, stopped)
+	final := proto.CloneOf(r)
+	final.TerminatePending = false
+	final.State = stopped.GetStatus().GetState()
+	final.SnapshotDurable = snapshotDurable(stopped.GetStatus())
+	final.Steps = append(final.Steps, ateapi.QuarantineStep_QUARANTINE_STEP_TERMINATED)
+	if err := s.impl.ReplaceActorHoldReceipt(leaseCtx, actorRef, final); err != nil {
+		return nil, nil, err
+	}
+	logActorStateChanged(leaseCtx, stopped, ateattr.OperationSuspend)
+	logQuarantineChanged(leaseCtx, stopped, ateattr.QuarantineActionTerminated, final, "")
+	return stopped, final, nil
 }
 
 // storedQuarantine returns the receipt a QuarantineActor call like want
@@ -282,6 +452,12 @@ func (s *RPCService) ReleaseQuarantine(ctx context.Context, req *ateapi.ReleaseQ
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
+	leaseCtx, lease, err := s.actorWorkflow.acquireActorLease(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
+	ctx = leaseCtx
 	caller, err := callerPrincipal(ctx)
 	if err != nil {
 		return nil, err
