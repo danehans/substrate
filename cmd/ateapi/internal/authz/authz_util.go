@@ -43,6 +43,12 @@ const (
 	RoleOwner  = "owner"
 	RoleEditor = "editor"
 	RoleViewer = "viewer"
+	// RoleHoldManager places and releases holds on actors.
+	RoleHoldManager = "hold_manager"
+	// RoleQuarantineManager quarantines actors.
+	RoleQuarantineManager = "quarantine_manager"
+	// RoleQuarantineAdmin quarantines actors and releases their quarantines.
+	RoleQuarantineAdmin = "quarantine_admin"
 
 	RoleController       = "controller"
 	RoleEgressGateway    = "egress_gateway"
@@ -65,6 +71,10 @@ const (
 	RelationCanResume               = "can_resume"
 	RelationCanSuspend              = "can_suspend"
 	RelationCanRevert               = "can_revert"
+	RelationCanHold                 = "can_hold"
+	RelationCanReleaseHold          = "can_release_hold"
+	RelationCanQuarantine           = "can_quarantine"
+	RelationCanReleaseQuarantine    = "can_release_quarantine"
 	RelationCanDrain                = "can_drain"
 	RelationCanListActorAssignments = "can_list_actor_assignments"
 	RelationCanCreateAccessPolicy   = "can_create_access_policy"

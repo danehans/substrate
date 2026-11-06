@@ -29,6 +29,8 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // revertableStates are the states a revert is accepted from. A SUSPENDED
@@ -146,6 +148,11 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 	ctx, done := stepSpan(ctx, "MarkReverting")
 	defer func() { err = done(err) }()
 
+	// An interrupted revert left REVERTING is refused too. QuarantineActor
+	// refuses a REVERTING actor, so a revert past this point finishes first.
+	if err := checkNotQuarantined(actorRef, actor, "revert"); err != nil {
+		return nil, err
+	}
 	st := actor.GetStatus().GetState()
 	if st == ateapi.ActorState_ACTOR_STATE_REVERTING {
 		markSkipped(ctx, "actor already REVERTING")
@@ -155,13 +162,21 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 		return nil, apierror.FailedPrecondition("Actor %s is not in a revertable state (got: %v, want one of %v, or %s with a node-local snapshot)", actorRef, st, revertableStates, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 	}
 
+	// A revert discards the execution and snapshots a quarantine keeps. The
+	// check is in the write, so a quarantine placed since the read wins.
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+		if err := checkNotQuarantined(actorRef, toUpdate, "revert"); err != nil {
+			return err
+		}
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_REVERTING
 		return nil
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
+		}
+		if status.Code(err) == codes.FailedPrecondition {
+			return nil, err
 		}
 		return nil, fmt.Errorf("while setting actor state to REVERTING: %w", err)
 	}

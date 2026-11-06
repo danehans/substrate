@@ -126,11 +126,27 @@ one **atespace**.
 | Get and list actors, actor templates, tags, egress policies | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Create, update, delete actors and actor templates | ✅ | | ✅ | ✅ | |
 | Resume, suspend, revert actors | ✅ | | ✅ | ✅ | |
+| Hold actors, and release one's own holds | ✅ | | ✅ | | |
+| Quarantine actors | ✅ | | ✅ | ✅ | |
+| Release quarantines | | | | | |
 | Create, update, delete egress policies | ✅ | | ✅ | ✅ | |
 | Create, publish, delete tags | ✅ | | ✅ | ✅ | |
 | Create an actor from a tag (`sourceTag`) | ✅ | | ✅ | ✅ | |
 | Workers: get, list, list assignments | ✅ | ✅ | | | |
 | Workers: create, update, delete, drain | ✅ | | | | |
+
+`hold_manager`, on the global scope or an atespace, grants holding actors,
+releasing one's own holds, and everything a viewer of the same scope has. It
+is for a security controller that needs no other access. Editor does not
+imply it, so an actor's editors cannot hold it or release a hold. Only the
+principal that placed a hold can release it, whatever its roles.
+
+`quarantine_manager`, on the global scope or an atespace, grants quarantining
+actors and everything a viewer of the same scope has. It is for a detection
+integration. `quarantine_admin` also grants releasing quarantines, and is the
+only role that does: no owner or editor can release a quarantine without it.
+An owner can still grant it to themselves through an access policy. See
+[actor quarantine](actor-quarantine.md).
 
 ### System roles
 
@@ -189,6 +205,9 @@ viewer, and a global role holds the same role in every atespace. So
 | `DeleteActor` | `can_delete`, the actor | Editor of its atespace |
 | `ListActors` | `can_list_actors`, the atespace, or global if none is given | Atespace viewer; for all atespaces, global viewer, `atenet-router` or `atenet-egress` |
 | `SuspendActor`, `RevertActor` | `can_suspend` / `can_revert`, the actor | Editor of its atespace |
+| `HoldActor`, `ReleaseActorHold` | `can_hold` / `can_release_hold`, the actor | Owner or `hold_manager` of its atespace. The handler also lets only a hold's holder release it. |
+| `QuarantineActor` | `can_quarantine`, the actor | Editor, `quarantine_manager` or `quarantine_admin` of its atespace |
+| `ReleaseQuarantine` | `can_release_quarantine`, the actor | `quarantine_admin` of its atespace |
 | `ResumeActor` | `can_resume`, the actor | Editor of its atespace; `atenet-router` |
 | `GetActorEgressPolicy` | `can_get_egress_policy`, the actor | Viewer of its atespace; `atenet-egress`; `atelet` |
 | `CreateActorEgressPolicy`, `UpdateActorEgressPolicy`, `DeleteActorEgressPolicy` | `can_create_egress_policy` / `can_update_egress_policy` / `can_delete_egress_policy`, the actor | Editor of its atespace |
@@ -270,7 +289,8 @@ kubectl ate --token-file me.token update access-policy -a team-a -f current.yaml
 kubectl ate --token-file me.token delete access-policy -a team-a
 ```
 
-- Global policies accept `owner` and `viewer`; atespace policies also accept
+- Global policies accept `owner`, `viewer`, `hold_manager`,
+  `quarantine_manager` and `quarantine_admin`; atespace policies also accept
   `editor`.
 - `update` replaces the whole policy and needs the `uid` and `version` from
   `get -o yaml`. It fails if the policy changed, or was deleted and recreated,

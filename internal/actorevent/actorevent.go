@@ -87,9 +87,10 @@ var identityKeys = []string{
 	string(ateattr.TemplateNameKey),
 }
 
-// Three names. A crash is its own because it has a different severity; there
+// Five names. A crash is its own because it has a different severity; there
 // is no name per state, because ate.actor.state already says which transition
-// happened. UsageSampled is the workers' measurement record.
+// happened. UsageSampled is the workers' measurement record. HoldChanged
+// audits holds, which change no state, and QuarantineChanged quarantines.
 var (
 	StateChanged = Event{
 		Name:     "ate.actor.state_changed",
@@ -137,9 +138,55 @@ var (
 	}
 )
 
+// HoldChanged records a hold placed or released by HoldActor or
+// ReleaseActorHold.
+var HoldChanged = Event{
+	Name:     "ate.actor.hold_changed",
+	Body:     "Actor hold changed",
+	Severity: log.SeverityInfo,
+	Keys: append(append([]string{}, identityKeys...),
+		string(ateattr.ActorHoldActionKey),
+		string(ateattr.ActorHoldHolderKey),
+		string(ateattr.ActorHoldCallerKey),
+		string(ateattr.ActorHoldReasonKey),
+		string(ateattr.ActorHoldRequestIDKey),
+		string(ateattr.ActorStateKey)),
+	// The incident ID is absent when the hold names none, the release
+	// request ID on a hold, and the activation while the actor has none.
+	Conditional: []string{
+		string(ateattr.ActorHoldIncidentIDKey),
+		string(ateattr.ActorHoldReleaseRequestIDKey),
+		string(ateattr.ActorActivationKey),
+	},
+}
+
+// QuarantineChanged records a quarantine placed, its suspend finished, a
+// quarantine released, or a resume a quarantine refused.
+var QuarantineChanged = Event{
+	Name:     "ate.actor.quarantine_changed",
+	Body:     "Actor quarantine changed",
+	Severity: log.SeverityWarn,
+	Keys: append(append([]string{}, identityKeys...),
+		string(ateattr.ActorQuarantineActionKey),
+		string(ateattr.ActorQuarantineRequestIDKey),
+		string(ateattr.ActorQuarantineReasonKey),
+		string(ateattr.ActorStateKey)),
+	// The caller is absent for an in-process resume, the incident ID when
+	// the quarantine names none, the steps on a release or a refused
+	// resume, the release request ID on everything but a release, and the
+	// activation when the quarantine found none.
+	Conditional: []string{
+		string(ateattr.ActorQuarantineCallerKey),
+		string(ateattr.ActorQuarantineIncidentIDKey),
+		string(ateattr.ActorQuarantineStepsKey),
+		string(ateattr.ActorQuarantineReleaseRequestIDKey),
+		string(ateattr.ActorActivationKey),
+	},
+}
+
 // events is the whole vocabulary, which the registry test walks. An event left
 // out of it is never checked against docs/metrics/registry/events.yaml.
-var events = []Event{StateChanged, Crashed, UsageSampled}
+var events = []Event{StateChanged, Crashed, UsageSampled, HoldChanged, QuarantineChanged}
 
 // BuildRecord turns the stdout record into its OTLP form. Attributes carry
 // everything machine-readable, so the body stays the display string.

@@ -54,7 +54,19 @@ func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapi.GetAc
 		return nil, resources.ToAPIError(errs)
 	}
 
-	return s.impl.GetEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	// The egress gateways fetch the policy for each request, TLS handshake
+	// or tunnel, and deny on this error, so a quarantine stops new egress
+	// without waiting for a policy change or cache. Updating the policy
+	// does not lift it.
+	actor, err := s.impl.GetActor(ctx, actorRef)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, fmt.Errorf("while getting Actor %s: %w", actorRef, err)
+	}
+	if err := checkNotQuarantined(actorRef, actor, "egress"); err != nil {
+		return nil, err
+	}
+	return s.impl.GetEgressPolicy(ctx, actorRef)
 }
 
 func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapi.EgressPolicy, error) {

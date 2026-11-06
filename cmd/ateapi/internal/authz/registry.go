@@ -250,6 +250,18 @@ var defaultRPCPermissions = map[string]rpcRule{
 	ateapi.Control_RevertActor_FullMethodName: rule(checksOf(func(r *ateapi.RevertActorRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanRevert, r.GetActor(), field.NewPath("actor"))
 	})),
+	ateapi.Control_HoldActor_FullMethodName: rule(checksOf(func(r *ateapi.HoldActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanHold, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapi.Control_ReleaseActorHold_FullMethodName: rule(checksOf(func(r *ateapi.ReleaseActorHoldRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanReleaseHold, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapi.Control_QuarantineActor_FullMethodName: rule(checksOf(func(r *ateapi.QuarantineActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanQuarantine, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapi.Control_ReleaseQuarantine_FullMethodName: rule(checksOf(func(r *ateapi.ReleaseQuarantineRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanReleaseQuarantine, r.GetActor(), field.NewPath("actor"))
+	})),
 
 	// Actor egress policies.
 	ateapi.Control_GetActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapi.GetActorEgressPolicyRequest) ([]check, field.ErrorList) {

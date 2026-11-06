@@ -544,7 +544,9 @@ func TestSuspendActor_Finalized_ReleasesReplacedSnapshot(t *testing.T) {
 		// than one it took itself, which is how an actor created from a tag
 		// starts out.
 		tagOwnedSnapshot bool
-		wantReleased     bool
+		// quarantined quarantines the actor before the suspend.
+		quarantined  bool
+		wantReleased bool
 	}{
 		{
 			name:         "releases the external snapshot the actor owned",
@@ -554,6 +556,11 @@ func TestSuspendActor_Finalized_ReleasesReplacedSnapshot(t *testing.T) {
 			name:             "leaves an external snapshot borrowed from a tag in place",
 			tagOwnedSnapshot: true,
 			wantReleased:     false,
+		},
+		{
+			name:         "keeps a quarantined actor's external snapshot",
+			quarantined:  true,
+			wantReleased: false,
 		},
 	}
 
@@ -592,6 +599,10 @@ func TestSuspendActor_Finalized_ReleasesReplacedSnapshot(t *testing.T) {
 					newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", fresh.Name(), fresh.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 				}
 			})
+
+			if tt.quarantined {
+				placeTestQuarantine(t, ctx, persistence, actorRef)
+			}
 
 			stored, _, err := w.SuspendActor(ctx, actorRef, suspendSync, lifecycleConditions{})
 			if err != nil {

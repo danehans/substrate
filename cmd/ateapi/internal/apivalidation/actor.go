@@ -70,6 +70,30 @@ func ValidateSuspendActorRequest(ctx context.Context, req *ateapi.SuspendActorRe
 	return Validate_SuspendActorRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateHoldActorRequest(ctx context.Context, req *ateapi.HoldActorRequest) field.ErrorList {
+	// Call the generated validation.
+	op := MakeCreateOp(ctx)
+	return Validate_HoldActorRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateReleaseActorHoldRequest(ctx context.Context, req *ateapi.ReleaseActorHoldRequest) field.ErrorList {
+	// Call the generated validation.
+	op := MakeCreateOp(ctx)
+	return Validate_ReleaseActorHoldRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateQuarantineActorRequest(ctx context.Context, req *ateapi.QuarantineActorRequest) field.ErrorList {
+	// Call the generated validation.
+	op := MakeCreateOp(ctx)
+	return Validate_QuarantineActorRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateReleaseQuarantineRequest(ctx context.Context, req *ateapi.ReleaseQuarantineRequest) field.ErrorList {
+	// Call the generated validation.
+	op := MakeCreateOp(ctx)
+	return Validate_ReleaseQuarantineRequest(ctx, op, nil, req, nil)
+}
+
 func ValidateRevertActorRequest(ctx context.Context, req *ateapi.RevertActorRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)

@@ -286,6 +286,16 @@ func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef
 		return mapEgressIdentityError(actorRef.Atespace, actorRef.Name, err)
 	}
 
+	// A quarantined actor gets no new tunnel, whatever its state. Requests
+	// on tunnels opened before the quarantine use the policy cache until
+	// the quarantine's suspend closes them.
+	if q := actor.GetStatus().GetQuarantine(); q != nil {
+		slog.WarnContext(ctx, "egress denied: actor is quarantined",
+			slog.Any("actor", actorRef), slog.String("quarantine_request_id", q.GetRequestId()), slog.String("destination", destination))
+		return extproc.NewReqError(envoy_type.StatusCode_Forbidden,
+			"egress denied: actor %q/%q is quarantined", actorRef.Atespace, actorRef.Name)
+	}
+
 	// The actor performing egress must be placed on a worker. RESUMING is
 	// saved together with the worker assignment, so a booting workload can
 	// reach the network before it answers its wakeup probe. Every other state

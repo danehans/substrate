@@ -150,6 +150,17 @@ cardinality_rules:
       - ate.actor.container.name
       - ate.actor.epoch
       - ate.actor.activation
+      - ate.actor.hold.holder
+      - ate.actor.hold.caller
+      - ate.actor.hold.reason
+      - ate.actor.hold.incident_id
+      - ate.actor.hold.request_id
+      - ate.actor.hold.release_request_id
+      - ate.actor.quarantine.caller
+      - ate.actor.quarantine.reason
+      - ate.actor.quarantine.incident_id
+      - ate.actor.quarantine.request_id
+      - ate.actor.quarantine.release_request_id
   - id: bounded-or-catalog-scoped
     brief: >
       Each ate.* metric label has a list of permitted values, or it names an

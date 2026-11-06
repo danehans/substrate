@@ -63,6 +63,34 @@ service Control {
     option (method).resource = "Actor";
   }
 
+  // Place the caller's hold on an actor. While the actor has any hold,
+  // ResumeActor and DeleteActor fail with FAILED_PRECONDITION. A hold does not
+  // stop a running actor, or keep it from being suspended or reverted.
+  rpc HoldActor(HoldActorRequest) returns (HoldActorResponse) {
+    option (method).resource = "Actor";
+  }
+
+  // Release a hold the caller placed. Releasing does not resume the actor.
+  rpc ReleaseActorHold(ReleaseActorHoldRequest) returns (ReleaseActorHoldResponse) {
+    option (method).resource = "Actor";
+  }
+
+  // Quarantine an actor. One write places a hold with the holder
+  // "quarantine" and sets status.quarantine. From then on ateapi refuses to
+  // resume, restore, revert, tag or delete the actor, mints no
+  // worker-for-actor certificate or actor JWT for it, keeps its snapshots,
+  // and fails GetActorEgressPolicy for it. A RUNNING actor is then
+  // suspended at the expected activation. See
+  // docs/guides/actor-quarantine.md.
+  rpc QuarantineActor(QuarantineActorRequest) returns (QuarantineActorResponse) {
+    option (method).resource = "Actor";
+  }
+
+  // Release an actor's quarantine. Releasing does not resume the actor.
+  rpc ReleaseQuarantine(ReleaseQuarantineRequest) returns (ReleaseQuarantineResponse) {
+    option (method).resource = "Actor";
+  }
+
   // Get the egress policy resource nested under an Actor.
   rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy) {
     option (method).resource = "EgressPolicy";
@@ -954,6 +982,75 @@ message ActorStatus {
   // +k8s:optional
   // +k8s:maxLength=26 # a ULID
   string activation_id = 8;
+
+  // holds lists the Actor's holds, oldest first. Only HoldActor and
+  // ReleaseActorHold change it. While it is not empty, ResumeActor and
+  // DeleteActor fail with FAILED_PRECONDITION.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=16
+  // +k8s:listType=atomic
+  repeated ActorHold holds = 9;
+
+  // quarantine is set while the Actor is quarantined. Only QuarantineActor
+  // and ReleaseQuarantine change it, in the writes that place and release
+  // the quarantine hold in holds.
+  //
+  // +k8s:optional
+  ActorQuarantine quarantine = 10;
+}
+
+// ActorQuarantine records the QuarantineActor call that quarantined an Actor.
+message ActorQuarantine {
+  // request_id is the QuarantineActor call's request_id. The quarantine hold
+  // has the same request_id, and ReleaseQuarantine names the quarantine by
+  // it.
+  string request_id = 1;
+
+  // caller is "user:" and the ID of the authenticated principal that made
+  // the call, as AccessPolicy members name it.
+  string caller = 2;
+
+  // reason is the call's reason.
+  string reason = 3;
+
+  // incident_id is the call's incident_id.
+  string incident_id = 4;
+
+  // activation_id is the Actor's activation when it was quarantined, empty
+  // if it had none.
+  string activation_id = 5;
+
+  // create_time is when the Actor was quarantined.
+  google.protobuf.Timestamp create_time = 6;
+}
+
+// ActorHold is one holder's hold on an Actor.
+message ActorHold {
+  // holder is "user:" and the ID of the authenticated principal that placed
+  // the hold, as AccessPolicy members name it, for example
+  // "user:spiffe://cluster.local/ns/sec/sa/controller". Only the holder can
+  // release the hold.
+  string holder = 1;
+
+  // reason is the HoldActor call's reason.
+  string reason = 2;
+
+  // incident_id is the HoldActor call's incident_id.
+  string incident_id = 3;
+
+  // request_id is the HoldActor call's request_id. ReleaseActorHold names
+  // the hold by it.
+  string request_id = 4;
+
+  // expected_uid is the HoldActor call's expected_uid.
+  string expected_uid = 5;
+
+  // expected_activation is the HoldActor call's expected_activation.
+  string expected_activation = 6;
+
+  // create_time is when the hold was placed.
+  google.protobuf.Timestamp create_time = 7;
 }
 
 // ActorCrash describes the failure that moved an Actor to CRASHED.
@@ -1923,14 +2020,17 @@ message ResumeActorResponse {
 }
 
 // LifecycleReceipt records what a SuspendActor or ResumeActor call that set
-// request_id did.
+// request_id did, or what a HoldActor, ReleaseActorHold, QuarantineActor or
+// ReleaseQuarantine call did.
 //
 // ateapi stores the receipt in the write that commits the call's transition,
 // keyed by the atespace, the Actor name and request_id. A later call with the
 // same key returns the stored receipt and does nothing else, even if the
 // Actor has since moved to another activation or been replaced. A call that
 // reuses the key with a different operation, expected_uid,
-// expected_activation or durability mode fails with ALREADY_EXISTS.
+// expected_activation or durability mode fails with ALREADY_EXISTS, and so
+// does a hold or release from another caller, or with another reason,
+// incident_id or hold_request_id.
 //
 // A receipt in SUSPENDING or RESUMING records a call that committed its
 // transition and did not finish. A retry continues it only while the Actor
@@ -1938,7 +2038,9 @@ message ResumeActorResponse {
 // returns the receipt as it is.
 //
 // ateapi keeps a receipt for 24 hours after it is created, including after
-// the Actor is deleted. Deleting the atespace deletes its receipts.
+// the Actor is deleted. A HoldActor or QuarantineActor receipt is also kept
+// while its hold exists, and for 24 hours after the release. Deleting the
+// atespace deletes its receipts.
 message LifecycleReceipt {
   // request_id is the caller's request_id.
   string request_id = 1;
@@ -1961,15 +2063,18 @@ message LifecycleReceipt {
   // activation_id is the activation the call affected. For a suspend, it is
   // the activation the call stopped, and is empty if the Actor was already
   // SUSPENDED. For a resume, it is the activation the call started, or the
-  // one the Actor was already RUNNING under.
+  // one the Actor was already RUNNING under. For a hold or a release, it is
+  // the Actor's activation when the receipt was written.
   string activation_id = 7;
 
   // transitioned is true if the call ran the transition, and false if the
-  // Actor was already in the target state.
+  // Actor was already in the target state. A hold always sets it. A release
+  // sets it only if it released a hold.
   bool transitioned = 8;
 
   // state is the Actor's state when the receipt was written: SUSPENDED or
-  // RUNNING once the call finished, SUSPENDING or RESUMING before.
+  // RUNNING once the call finished, SUSPENDING or RESUMING before. A hold
+  // or a release does not change it.
   ActorState state = 9;
 
   // mode is the durability mode of a suspend. Unspecified for a resume.
@@ -1984,8 +2089,58 @@ message LifecycleReceipt {
   // create_time is when ateapi first stored the receipt.
   google.protobuf.Timestamp create_time = 12;
 
-  // expire_time is when ateapi may delete the receipt.
+  // expire_time is when ateapi may delete the receipt. A HoldActor receipt
+  // is kept past it while its hold exists, and for 24 hours after the
+  // release.
   google.protobuf.Timestamp expire_time = 13;
+
+  // hold is the hold a HoldActor or QuarantineActor call placed, or a
+  // ReleaseActorHold or ReleaseQuarantine call released. For a release that
+  // found no such hold, it has only the holder and request_id the call
+  // named.
+  ActorHold hold = 14;
+
+  // quarantine is the quarantine a QuarantineActor call placed or a
+  // ReleaseQuarantine call released. For a release that found none, it has
+  // only the request_id the call named.
+  ActorQuarantine quarantine = 15;
+
+  // caller is the principal that made a QuarantineActor or ReleaseQuarantine
+  // call, as ActorQuarantine.caller names it.
+  string caller = 16;
+
+  // reason is the reason of a QuarantineActor or ReleaseQuarantine call.
+  string reason = 17;
+
+  // steps lists what a QuarantineActor call put in place, in order. A
+  // receipt in RUNNING without QUARANTINE_STEP_SUSPENDED records a call
+  // that placed the quarantine and has not finished the suspend. A retry
+  // continues it.
+  repeated QuarantineStep steps = 18;
+
+  // suspend_request_id is the request_id of the suspend a QuarantineActor
+  // call ran, whose own receipt is stored under it.
+  string suspend_request_id = 19;
+}
+
+// QuarantineStep names one effect of a QuarantineActor call.
+enum QuarantineStep {
+  QUARANTINE_STEP_UNSPECIFIED = 0;
+
+  // The quarantine hold is placed. ResumeActor, from any caller and the
+  // ingress router, fails with FAILED_PRECONDITION, and so does DeleteActor.
+  QUARANTINE_STEP_HOLD = 1;
+
+  // status.quarantine is set. ateapi refuses RevertActor and CreateTag for
+  // the Actor, refuses MintWorkerActorCertificate and MintActorJwt for it,
+  // keeps the snapshots a suspend replaces, and fails
+  // GetActorEgressPolicy for it with FAILED_PRECONDITION, which the egress
+  // gateways treat as a denial.
+  QUARANTINE_STEP_MARKED = 2;
+
+  // The Actor was RUNNING at the expected activation and is now suspended:
+  // its workload is gone, and with it its open connections.
+  QUARANTINE_STEP_SUSPENDED = 3;
 }
 
 // LifecycleOperation names the call a LifecycleReceipt records.
@@ -1993,6 +2148,209 @@ enum LifecycleOperation {
   LIFECYCLE_OPERATION_UNSPECIFIED = 0;
   LIFECYCLE_OPERATION_SUSPEND = 1;
   LIFECYCLE_OPERATION_RESUME = 2;
+  LIFECYCLE_OPERATION_HOLD = 3;
+  LIFECYCLE_OPERATION_RELEASE_HOLD = 4;
+  LIFECYCLE_OPERATION_QUARANTINE = 5;
+  LIFECYCLE_OPERATION_RELEASE_QUARANTINE = 6;
+}
+
+// HoldActorRequest places the caller's hold on an Actor.
+message HoldActorRequest {
+  // actor to hold.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+
+  // reason says why the Actor is held.
+  //
+  // +k8s:required
+  // +k8s:maxLength=1024
+  string reason = 2;
+
+  // incident_id, if set, names the incident the hold belongs to.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string incident_id = 3;
+
+  // expected_uid, if set, holds the Actor only if it has this uid. A
+  // mismatch fails with FAILED_PRECONDITION and changes nothing.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string expected_uid = 4;
+
+  // expected_activation, if set, holds the Actor only while its
+  // status.activation_id is this one. A SUSPENDED Actor holds no activation,
+  // so it never matches. A mismatch fails with FAILED_PRECONDITION and
+  // changes nothing.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string expected_activation = 5;
+
+  // request_id names the hold and makes the call idempotent. No two holds on
+  // an Actor have the same request_id. A retry with the same parameters
+  // returns the original receipt while the hold exists, and for 24 hours
+  // after it is released. See LifecycleReceipt.
+  //
+  // +k8s:required
+  // +k8s:maxLength=128
+  string request_id = 6;
+}
+
+// HoldActorResponse holds the Actor and the receipt of the hold.
+message HoldActorResponse {
+  // actor is the Actor after the hold. Unset when the response replays a
+  // stored receipt.
+  Actor actor = 1;
+
+  // receipt records the hold.
+  LifecycleReceipt receipt = 2;
+}
+
+// ReleaseActorHoldRequest releases one of the caller's holds on an Actor.
+message ReleaseActorHoldRequest {
+  // actor whose hold is released.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+
+  // hold_request_id is the request_id of the HoldActor call that placed the
+  // hold. Only a hold the caller placed is released.
+  //
+  // +k8s:required
+  // +k8s:maxLength=128
+  string hold_request_id = 2;
+
+  // expected_uid, if set, releases the hold only if the Actor has this uid.
+  // A mismatch fails with FAILED_PRECONDITION and changes nothing.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string expected_uid = 3;
+
+  // request_id makes the call idempotent. See LifecycleReceipt.
+  //
+  // +k8s:required
+  // +k8s:maxLength=128
+  string request_id = 4;
+}
+
+// ReleaseActorHoldResponse holds the Actor and the receipt of the release.
+message ReleaseActorHoldResponse {
+  // actor is the Actor after the release. Unset when the response replays a
+  // stored receipt.
+  Actor actor = 1;
+
+  // receipt records the release. transitioned is false if the caller held
+  // no hold with hold_request_id.
+  LifecycleReceipt receipt = 2;
+}
+
+// QuarantineActorRequest quarantines an Actor.
+message QuarantineActorRequest {
+  // actor to quarantine.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+
+  // reason says why the Actor is quarantined.
+  //
+  // +k8s:required
+  // +k8s:maxLength=1024
+  string reason = 2;
+
+  // incident_id, if set, names the incident the quarantine belongs to.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string incident_id = 3;
+
+  // expected_uid, if set, quarantines the Actor only if it has this uid. A
+  // mismatch fails with FAILED_PRECONDITION and changes nothing.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string expected_uid = 4;
+
+  // expected_activation, if set, quarantines the Actor only while its
+  // status.activation_id is this one, and the suspend stops only this
+  // activation. A SUSPENDED Actor holds no activation, so it never matches.
+  // A mismatch fails with FAILED_PRECONDITION and changes nothing.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=26 # a ULID
+  string expected_activation = 5;
+
+  // request_id names the quarantine and makes the call idempotent. A retry
+  // with the same parameters returns the original receipt, and continues a
+  // suspend the first call did not finish. The suspend's own receipt is
+  // stored under request_id and "/suspend".
+  //
+  // +k8s:required
+  // +k8s:maxLength=120
+  string request_id = 6;
+}
+
+// QuarantineActorResponse holds the Actor and the receipt of the quarantine.
+message QuarantineActorResponse {
+  // actor is the Actor after the quarantine. Unset when the response
+  // replays a stored receipt.
+  Actor actor = 1;
+
+  // receipt records the quarantine and the steps that took effect.
+  LifecycleReceipt receipt = 2;
+}
+
+// ReleaseQuarantineRequest releases an Actor's quarantine.
+message ReleaseQuarantineRequest {
+  // actor whose quarantine is released.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+
+  // quarantine_request_id is the request_id of the QuarantineActor call that
+  // placed the quarantine. A later quarantine under another request_id is
+  // not released.
+  //
+  // +k8s:required
+  // +k8s:maxLength=128
+  string quarantine_request_id = 2;
+
+  // reason says why the quarantine is released.
+  //
+  // +k8s:required
+  // +k8s:maxLength=1024
+  string reason = 3;
+
+  // expected_uid, if set, releases the quarantine only if the Actor has this
+  // uid. A mismatch fails with FAILED_PRECONDITION and changes nothing.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string expected_uid = 4;
+
+  // request_id makes the call idempotent. See LifecycleReceipt.
+  //
+  // +k8s:required
+  // +k8s:maxLength=128
+  string request_id = 5;
+}
+
+// ReleaseQuarantineResponse holds the Actor and the receipt of the release.
+message ReleaseQuarantineResponse {
+  // actor is the Actor after the release. Unset when the response replays a
+  // stored receipt.
+  Actor actor = 1;
+
+  // receipt records the release. transitioned is false if the Actor had no
+  // quarantine with quarantine_request_id.
+  LifecycleReceipt receipt = 2;
 }
 
 // RevertActorRequest identifies the Actor to revert.

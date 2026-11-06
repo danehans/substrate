@@ -27,6 +27,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
+	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
@@ -77,6 +78,16 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapi.Min
 	}
 	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
 		return nil, apierror.Aborted("conflict; actor has been deleted and recreated")
+	}
+	// A quarantined actor gets no new egress identity. FailedPrecondition
+	// ends atunnel's renewal loop, after which atunnel refuses new egress.
+	if q := dbActor.GetStatus().GetQuarantine(); q != nil {
+		slog.WarnContext(ctx, "Refusing a worker-for-actor certificate for a quarantined actor",
+			slog.String("actor", resources.ActorRefFromActor(dbActor).String()),
+			slog.String("quarantine_request_id", q.GetRequestId()),
+			slog.String("caller_worker", req.GetWorker().GetName()))
+		return nil, apierror.FailedPreconditionWithInfo(apierror.ReasonTerminalState, map[string]string{"cause": controlapi.CauseActorQuarantined},
+			"Actor %s is quarantined; no certificate is minted for it", resources.ActorRefFromActor(dbActor))
 	}
 	// The certificate names one activation: the one this worker was given on
 	// Run or Restore. Once the Actor holds another (a later resume, or a

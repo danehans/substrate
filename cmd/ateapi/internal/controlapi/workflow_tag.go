@@ -78,6 +78,10 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (
 	if err != nil {
 		return nil, err
 	}
+	// A tag would copy the quarantined snapshot for other actors to restore.
+	if err := checkNotQuarantined(actorRef, actor, "tagging"); err != nil {
+		return nil, err
+	}
 	// Runs before the upload, so a create that cannot succeed fails fast.
 	if err := w.checkTagCreatable(leaseCtx, tagRef, actorTemplate); err != nil {
 		return nil, err

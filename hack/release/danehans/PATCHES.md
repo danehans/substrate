@@ -50,6 +50,23 @@ names its upstream proposal and the condition that retires it.
      Picket's `substrate` runtime pins and qualifies it
      ([solo-io/picket#15](https://github.com/solo-io/picket/issues/15)).
 
+3. **Actor quarantine.** `QuarantineActor` places a hold with the holder
+   `quarantine` and sets `ActorStatus.quarantine` in one write, then suspends
+   a `RUNNING` actor at the expected activation. While quarantined, ateapi
+   refuses resume, delete, revert and tagging, refuses worker-for-actor
+   certificates and actor JWTs, keeps replaced snapshots, and fails
+   `GetActorEgressPolicy`, which agentgateway denies on for every request and
+   TLS handshake. atenet refuses new tunnels. `ReleaseQuarantine` takes the
+   new `quarantine_admin` role. It builds on the actor holds from
+   [agent-substrate/substrate#3066](https://github.com/agent-substrate/substrate/issues/3066). See
+   [actor quarantine](../../../docs/guides/actor-quarantine.md).
+   - Upstream proposal:
+     [agent-substrate/substrate#3463](https://github.com/agent-substrate/substrate/issues/3463).
+   - Replacement condition: a `kagent-dev/substrate` release quarantines
+     actors with these semantics, and Picket's `substrate` runtime pins and
+     qualifies it
+     ([solo-io/picket#15](https://github.com/solo-io/picket/issues/15)).
+
 ## Packaging changes
 
 1. **Release publishing.** The release workflow publishes this fork's images
