@@ -24,22 +24,11 @@ import (
 	"go.ate.dev/substrate/internal/substratex509"
 )
 
-// The egress router names the actor from the certificate's SPIFFE URI and does
-// not read the ActorIdentity extension, so a certificate whose extension
-// carries ActivationId resolves to the same actor, through both the
-// agentgateway attribute and XFCC.
+// The egress router accepts a certificate whose activation matches the Actor,
+// through both the agentgateway attribute and XFCC.
 func TestActorCertificateWithActivationIdResolvesActor(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
-	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{mutate: func(c *x509.Certificate) {
-		if err := substratex509.AddActorIdentityToCertificate(&substratex509.ActorIdentity{
-			Atespace:     "foo",
-			ActorName:    "bar",
-			ActorUid:     "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21",
-			ActivationId: "01JC2Z6N8Q3W9X4Y5Z6A7B8C9D",
-		}, c); err != nil {
-			t.Fatalf("AddActorIdentityToCertificate: %v", err)
-		}
-	}})
+	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{activation: "01JC2Z6N8Q3W9X4Y5Z6A7B8C9D"})
 	identity, err := substratex509.ActorIdentityFromCertificate(leaf)
 	if err != nil || identity.ActivationId == "" {
 		t.Fatalf("test certificate carries no ActivationId: %+v, %v", identity, err)
@@ -53,11 +42,13 @@ func TestActorCertificateWithActivationIdResolvesActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verifyActorCertificate: %v", err)
 	}
-	if want := (resources.ActorRef{Atespace: "foo", Name: "bar"}); ref != want {
+	if want := (resources.ActorRef{Atespace: "foo", Name: "bar"}); ref.ref != want {
 		t.Errorf("verifyActorCertificate = %v, want %v", ref, want)
 	}
 
-	h := egressHandler(ca.loadRoots, runningActor(), nil)
+	actor := runningActor()
+	actor.Status.ActivationId = identity.ActivationId
+	h := egressHandler(ca.loadRoots, actor, nil)
 	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw})
 	if _, err := h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(string(certificate))); err != nil {
 		t.Errorf("HandleRequestHeaders(agentgateway attribute) error = %v, want nil", err)
