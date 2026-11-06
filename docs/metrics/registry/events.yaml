@@ -237,10 +237,10 @@ groups:
     type: event
     name: ate.actor.quarantine_changed
     stability: development
-    brief: An actor was quarantined, suspended by its quarantine, or released, or its quarantine refused a resume.
+    brief: An actor was quarantined, suspended or terminated by its quarantine, or released, or its quarantine refused a resume.
     note: >
       ateapi writes one record when QuarantineActor places a quarantine, one
-      when it finishes suspending the quarantined activation, one when
+      when it finishes suspending or terminating the quarantined activation, one when
       ReleaseQuarantine releases it, and one for each ResumeActor the
       quarantine refuses before the resume writes anything. A retry that
       replays a receipt, and a release that finds no quarantine, write none.

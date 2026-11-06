@@ -495,6 +495,9 @@ const (
 	// The Actor was RUNNING at the expected activation and is now suspended:
 	// its workload is gone, and with it its open connections.
 	QuarantineStep_QUARANTINE_STEP_SUSPENDED QuarantineStep = 3
+	// The failed suspend was followed by termination of the same activation.
+	// The next resume restores the last completed durable snapshot.
+	QuarantineStep_QUARANTINE_STEP_TERMINATED QuarantineStep = 4
 )
 
 // Enum value maps for QuarantineStep.
@@ -504,12 +507,14 @@ var (
 		1: "QUARANTINE_STEP_HOLD",
 		2: "QUARANTINE_STEP_MARKED",
 		3: "QUARANTINE_STEP_SUSPENDED",
+		4: "QUARANTINE_STEP_TERMINATED",
 	}
 	QuarantineStep_value = map[string]int32{
 		"QUARANTINE_STEP_UNSPECIFIED": 0,
 		"QUARANTINE_STEP_HOLD":        1,
 		"QUARANTINE_STEP_MARKED":      2,
 		"QUARANTINE_STEP_SUSPENDED":   3,
+		"QUARANTINE_STEP_TERMINATED":  4,
 	}
 )
 
@@ -5897,13 +5902,15 @@ type LifecycleReceipt struct {
 	// reason is the reason of a QuarantineActor or ReleaseQuarantine call.
 	Reason string `protobuf:"bytes,17,opt,name=reason,proto3" json:"reason,omitempty"`
 	// steps lists what a QuarantineActor call put in place, in order. A
-	// receipt in RUNNING without QUARANTINE_STEP_SUSPENDED records a call
-	// that placed the quarantine and has not finished the suspend. A retry
-	// continues it.
+	// receipt in RUNNING without QUARANTINE_STEP_SUSPENDED or
+	// QUARANTINE_STEP_TERMINATED has not finished stopping the activation.
 	Steps []QuarantineStep `protobuf:"varint,18,rep,packed,name=steps,proto3,enum=substrate.ateapi.v1.QuarantineStep" json:"steps,omitempty"`
 	// suspend_request_id is the request_id of the suspend a QuarantineActor
 	// call ran, whose own receipt is stored under it.
 	SuspendRequestId string `protobuf:"bytes,19,opt,name=suspend_request_id,json=suspendRequestId,proto3" json:"suspend_request_id,omitempty"`
+	// terminate_pending records that the suspend failed and a retry must
+	// finish terminating the original activation instead of checkpointing it.
+	TerminatePending bool `protobuf:"varint,20,opt,name=terminate_pending,json=terminatePending,proto3" json:"terminate_pending,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -6069,6 +6076,13 @@ func (x *LifecycleReceipt) GetSuspendRequestId() string {
 		return x.SuspendRequestId
 	}
 	return ""
+}
+
+func (x *LifecycleReceipt) GetTerminatePending() bool {
+	if x != nil {
+		return x.TerminatePending
+	}
+	return false
 }
 
 // HoldActorRequest places the caller's hold on an Actor.
@@ -11700,7 +11714,7 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x13ResumeActorResponse\x120\n" +
 	"\x05actor\x18\x01 \x01(\v2\x1a.substrate.ateapi.v1.ActorR\x05actor\x12\x18\n" +
 	"\aresumed\x18\x02 \x01(\bR\aresumed\x12?\n" +
-	"\areceipt\x18\x03 \x01(\v2%.substrate.ateapi.v1.LifecycleReceiptR\areceipt\"\x90\a\n" +
+	"\areceipt\x18\x03 \x01(\v2%.substrate.ateapi.v1.LifecycleReceiptR\areceipt\"\xbd\a\n" +
 	"\x10LifecycleReceipt\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12E\n" +
@@ -11726,7 +11740,8 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x06caller\x18\x10 \x01(\tR\x06caller\x12\x16\n" +
 	"\x06reason\x18\x11 \x01(\tR\x06reason\x129\n" +
 	"\x05steps\x18\x12 \x03(\x0e2#.substrate.ateapi.v1.QuarantineStepR\x05steps\x12,\n" +
-	"\x12suspend_request_id\x18\x13 \x01(\tR\x10suspendRequestId\"\xf4\x01\n" +
+	"\x12suspend_request_id\x18\x13 \x01(\tR\x10suspendRequestId\x12+\n" +
+	"\x11terminate_pending\x18\x14 \x01(\bR\x10terminatePending\"\xf4\x01\n" +
 	"\x10HoldActorRequest\x124\n" +
 	"\x05actor\x18\x01 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x05actor\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x1f\n" +
@@ -12052,12 +12067,13 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x0eDurabilityMode\x12\x1f\n" +
 	"\x1bDURABILITY_MODE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bDURABILITY_MODE_SYNCHRONOUS\x10\x01\x12 \n" +
-	"\x1cDURABILITY_MODE_ASYNCHRONOUS\x10\x02*\x86\x01\n" +
+	"\x1cDURABILITY_MODE_ASYNCHRONOUS\x10\x02*\xa6\x01\n" +
 	"\x0eQuarantineStep\x12\x1f\n" +
 	"\x1bQUARANTINE_STEP_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14QUARANTINE_STEP_HOLD\x10\x01\x12\x1a\n" +
 	"\x16QUARANTINE_STEP_MARKED\x10\x02\x12\x1d\n" +
-	"\x19QUARANTINE_STEP_SUSPENDED\x10\x03*\x8e\x02\n" +
+	"\x19QUARANTINE_STEP_SUSPENDED\x10\x03\x12\x1e\n" +
+	"\x1aQUARANTINE_STEP_TERMINATED\x10\x04*\x8e\x02\n" +
 	"\x12LifecycleOperation\x12#\n" +
 	"\x1fLIFECYCLE_OPERATION_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bLIFECYCLE_OPERATION_SUSPEND\x10\x01\x12\x1e\n" +

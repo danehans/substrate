@@ -33,9 +33,17 @@ ateapi then:
    suspend under the `request_id` and `/suspend`, and replaces the receipt
    with one that adds `QUARANTINE_STEP_SUSPENDED`.
 
-The receipt's `steps` say what took effect. If the suspend fails, the call
-returns the error, the quarantine stays, and a retry with the same
-`request_id` finishes the suspend.
+The receipt's `steps` say what took effect. If the suspend fails while that
+activation remains assigned, ateapi terminates it. Termination discards the
+run's memory state and adds `QUARANTINE_STEP_TERMINATED` to the receipt. The
+actor becomes `SUSPENDED`. If termination fails, the quarantine stays and a
+retry with the same `request_id` finishes it. Release does not resume the
+actor. The next resume uses its last completed durable snapshot under a new
+activation, or starts from the template if none exists.
+
+If the workload stops but the final receipt cannot be stored, a retry reports
+an unknown outcome and keeps `terminate_pending`. It does not attribute that
+stop to this quarantine without a receipt.
 
 ## What stops at the quarantine write
 
@@ -70,16 +78,16 @@ needs the policy's `uid` and `version`, which a read can't return while the
 actor is quarantined, so use the values read before the quarantine, or update
 the policy after the release.
 
-## What stops when the suspend finishes
+## What stops when the workload stops
 
-The suspend tears down the workload. atunnel closes every egress tunnel,
+Suspend or fallback termination tears down the workload. atunnel closes every egress tunnel,
 including TLS passthrough ones, and cancels in-flight ingress requests. The
 actor is then `SUSPENDED`, and both gateways refuse new tunnels from it.
-This is the only step that closes connections that are already open.
+These are the steps that close connections that are already open.
 
 ## What can last up to a TTL
 
-Until the suspend finishes:
+Until the workload stops:
 
 - agentgateway caches an actor's worker assignment for 5 seconds, so an
   ingress request can still reach a running actor for that long.
@@ -101,10 +109,9 @@ does not retry that suspend: retry `SuspendActor` with its own `request_id`
 if it is stuck. A `REVERTING` actor can't be quarantined until the revert
 finishes, because a revert discards snapshots; retry the call.
 
-If the suspend fails, the quarantine stays in place but open connections stay
-open until the workload stops. Retry the call. A retry continues the suspend
-only while the quarantine is in place, so it never suspends the actor after
-the release.
+If the suspend fails and termination also fails, the quarantine stays in place
+but open connections may remain. Retry the call to finish termination. A retry
+does not terminate after the quarantine is released.
 
 ## Evidence
 
@@ -138,7 +145,7 @@ not run that state again.
 
 ## Audit
 
-Each quarantine, each suspend it finishes, each release, and each resume a
+Each quarantine, each suspend or terminate it finishes, each release, and each resume a
 quarantine refuses writes an `ate.actor.quarantine_changed` event with the
 caller, reason, incident ID, request ID, uid, the activation the quarantine
 found, and the steps in effect. See `docs/metrics/registry/events.yaml`.
@@ -147,8 +154,8 @@ the stream grows with ingress traffic to it.
 
 ## Out of scope
 
-- Closing open connections without a suspend. That needs an agentgateway
-  change to end tunnels when an actor is quarantined.
+- Closing open connections without stopping the workload. That needs an
+  agentgateway change to end tunnels when an actor is quarantined.
 - agentgateway reading `status.quarantine` itself. It denies through the
   egress policy fetch instead, and still admits a tunnel from a running
   quarantined actor before denying the requests in it.
