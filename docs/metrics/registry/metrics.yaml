@@ -253,6 +253,10 @@ groups:
               stability: development
               value: suspended
               brief: QuarantineActor suspended the activation it quarantined.
+            - id: terminated
+              stability: development
+              value: terminated
+              brief: QuarantineActor terminated the activation after its suspend failed.
             - id: released
               stability: development
               value: released

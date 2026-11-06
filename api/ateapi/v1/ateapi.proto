@@ -2121,14 +2121,17 @@ message LifecycleReceipt {
   string reason = 17;
 
   // steps lists what a QuarantineActor call put in place, in order. A
-  // receipt in RUNNING without QUARANTINE_STEP_SUSPENDED records a call
-  // that placed the quarantine and has not finished the suspend. A retry
-  // continues it.
+  // receipt in RUNNING without QUARANTINE_STEP_SUSPENDED or
+  // QUARANTINE_STEP_TERMINATED has not finished stopping the activation.
   repeated QuarantineStep steps = 18;
 
   // suspend_request_id is the request_id of the suspend a QuarantineActor
   // call ran, whose own receipt is stored under it.
   string suspend_request_id = 19;
+
+  // terminate_pending records that the suspend failed and a retry must
+  // finish terminating the original activation instead of checkpointing it.
+  bool terminate_pending = 20;
 }
 
 // QuarantineStep names one effect of a QuarantineActor call.
@@ -2149,6 +2152,10 @@ enum QuarantineStep {
   // The Actor was RUNNING at the expected activation and is now suspended:
   // its workload is gone, and with it its open connections.
   QUARANTINE_STEP_SUSPENDED = 3;
+
+  // The failed suspend was followed by termination of the same activation.
+  // The next resume restores the last completed durable snapshot.
+  QUARANTINE_STEP_TERMINATED = 4;
 }
 
 // LifecycleOperation names the call a LifecycleReceipt records.

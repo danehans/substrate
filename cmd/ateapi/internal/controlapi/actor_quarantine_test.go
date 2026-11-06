@@ -91,6 +91,23 @@ func TestLogQuarantineChanged(t *testing.T) {
 			string(ateattr.ActorQuarantineStepsKey):  "hold,marked,suspended",
 		}),
 	}, {
+		name:   "terminated",
+		action: ateattr.QuarantineActionTerminated,
+		r: func() *ateapi.LifecycleReceipt {
+			r := ateapi.LifecycleReceipt{
+				RequestId: quarantine.GetRequestId(), ActivationId: quarantine.GetActivationId(),
+				Caller: quarantine.GetCaller(), Reason: quarantine.GetReason(), Hold: quarantine.GetHold(),
+				Steps: []ateapi.QuarantineStep{ateapi.QuarantineStep_QUARANTINE_STEP_HOLD, ateapi.QuarantineStep_QUARANTINE_STEP_MARKED, ateapi.QuarantineStep_QUARANTINE_STEP_TERMINATED},
+			}
+			return &r
+		}(),
+		want: with(map[string]string{
+			string(ateattr.ActorQuarantineActionKey): ateattr.QuarantineActionTerminated,
+			string(ateattr.ActorQuarantineCallerKey): "user:detector",
+			string(ateattr.ActorQuarantineReasonKey): "exfiltration",
+			string(ateattr.ActorQuarantineStepsKey):  "hold,marked,terminated",
+		}),
+	}, {
 		name:             "released",
 		action:           ateattr.QuarantineActionReleased,
 		r:                release,

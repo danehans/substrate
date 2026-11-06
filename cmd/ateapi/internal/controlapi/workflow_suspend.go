@@ -89,6 +89,13 @@ func (m suspendMode) durability() ateapi.DurabilityMode {
 // one with no actor; see LifecycleReceipt.
 func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, cond lifecycleConditions) (_ *ateapi.Actor, _ *ateapi.LifecycleReceipt, err error) {
 	ctx = preview.ContextWithOptIn(ctx)
+	return w.suspendActor(ctx, actorRef, mode, cond, false)
+}
+
+// suspendActor keeps the assignment after a failed quarantine checkpoint so
+// QuarantineActor can terminate that exact activation instead of crashing it.
+func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, cond lifecycleConditions, quarantine bool) (_ *ateapi.Actor, _ *ateapi.LifecycleReceipt, err error) {
+	ctx = preview.ContextWithOptIn(ctx)
 	start := time.Now()
 	var actor *ateapi.Actor
 	var actorTemplate *ateapi.ActorTemplate
@@ -156,7 +163,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 		return nil, nil, err
 	}
 	actor = marked
-	wireFidelity, ateletState, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate, mode)
+	wireFidelity, ateletState, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate, mode, quarantine)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -297,7 +304,7 @@ func suspendingReceipt(stored *ateapi.Actor, r *ateapi.LifecycleReceipt) {
 // ensureMarkedSuspending minted once, and atelet answers a Checkpoint of a
 // snapshot it already committed without checkpointing again, so a retry after
 // a lost response succeeds.
-func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, mode suspendMode) (wireFidelity string, state *ateletpb.ActorSnapshotState, err error) {
+func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, mode suspendMode, quarantine bool) (wireFidelity string, state *ateletpb.ActorSnapshotState, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletSuspend")
 	defer func() { err = done(err) }()
 
@@ -342,6 +349,9 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 
 	resp, err := client.Checkpoint(ctx, req)
 	if err != nil {
+		if quarantine {
+			return wireFidelity, nil, err
+		}
 		// A snapshot conflict leaves the actor and its assignment intact for a retry.
 		if ctx.Err() == nil && status.Code(err) == codes.Aborted {
 			return wireFidelity, nil, apierror.Aborted("while calling atelet Checkpoint: %w", err)

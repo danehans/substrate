@@ -99,12 +99,25 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 }
 
 // ensureAteletTerminated calls atelet to terminate the workload for opName.
-func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string) (err error) {
+func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string) error {
+	return w.terminateAtelet(ctx, actorRef, actor, actorTemplate, opName, false)
+}
+
+// ensureAteletTerminatedForQuarantine requires an atelet response. A missing
+// Node object does not prove that its workload or tunnels have stopped.
+func (w *ActorWorkflow) ensureAteletTerminatedForQuarantine(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) error {
+	return w.terminateAtelet(ctx, actorRef, actor, actorTemplate, ateattr.OperationSuspend, true)
+}
+
+func (w *ActorWorkflow) terminateAtelet(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string, requireResponse bool) (err error) {
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
 	nodeName := actor.GetStatus().GetAssignedNode()
 	if nodeName == "" {
+		if requireResponse {
+			return apierror.FailedPrecondition("Actor %s has no node to terminate", actorRef)
+		}
 		slog.InfoContext(ctx, "actor has no assigned node, skipping atelet terminate request", slog.Any("actor", actorRef))
 		return nil
 	}
@@ -120,6 +133,9 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			return fmt.Errorf("while connecting to atelet on node %q: %w (and while checking the node: %w)", nodeName, err, nodeErr)
 		}
 		if gone {
+			if requireResponse {
+				return apierror.Unavailable("cannot confirm termination of Actor %s: assigned node %q is gone", actorRef, nodeName)
+			}
 			// A deleted Node object counts as the node being gone for good. If the
 			// machine still runs, whatever atelet holds for the actor stays there.
 			slog.WarnContext(ctx, "assigned node no longer exists, skipping atelet terminate request",

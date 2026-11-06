@@ -115,9 +115,11 @@ func TestEnsureAteletTerminated_NodeGone(t *testing.T) {
 		name      string
 		nodes     []string
 		lookupErr error
+		strict    bool
 		wantErr   bool
 	}{
 		{name: "node gone", nodes: []string{"node2"}},
+		{name: "quarantine cannot confirm node gone", nodes: []string{"node2"}, strict: true, wantErr: true},
 		{name: "node still there", nodes: []string{"node1"}, wantErr: true},
 		{name: "node lookup fails", lookupErr: errors.New("connection refused"), wantErr: true},
 	} {
@@ -125,11 +127,19 @@ func TestEnsureAteletTerminated_NodeGone(t *testing.T) {
 			w := newTestActorWorkflow(t, newTestPersistence(t), "team-a", "tmpl")
 			w.dialer = NewAteletDialer(newTestAteletIndexer(t), installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "",
 				WithNodeGetter(nodeGetter(tc.lookupErr, tc.nodes...)))
-			err := w.ensureAteletTerminated(context.Background(), actorRef, actor, nil, "revert")
+			var err error
+			if tc.strict {
+				err = w.ensureAteletTerminatedForQuarantine(context.Background(), actorRef, actor, nil)
+			} else {
+				err = w.ensureAteletTerminated(context.Background(), actorRef, actor, nil, "revert")
+			}
 			if tc.wantErr != (err != nil) {
 				t.Fatalf("ensureAteletTerminated = %v, want error %v", err, tc.wantErr)
 			}
-			if tc.wantErr && !errors.Is(err, ErrNoAteletOnNode) {
+			if tc.strict && !strings.Contains(err.Error(), "cannot confirm termination") {
+				t.Fatalf("quarantine termination = %v, want unconfirmed outcome", err)
+			}
+			if tc.wantErr && !tc.strict && !errors.Is(err, ErrNoAteletOnNode) {
 				t.Fatalf("ensureAteletTerminated = %v, want ErrNoAteletOnNode", err)
 			}
 			if tc.lookupErr != nil && !strings.Contains(err.Error(), tc.lookupErr.Error()) {

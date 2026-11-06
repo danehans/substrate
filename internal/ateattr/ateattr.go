@@ -135,6 +135,7 @@ const (
 const (
 	QuarantineActionQuarantined   = "quarantined"
 	QuarantineActionSuspended     = "suspended"
+	QuarantineActionTerminated    = "terminated"
 	QuarantineActionReleased      = "released"
 	QuarantineActionResumeRefused = "resume_refused"
 )

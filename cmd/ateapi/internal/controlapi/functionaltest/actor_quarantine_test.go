@@ -16,6 +16,7 @@ package functionaltest
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -36,8 +37,9 @@ const (
 )
 
 var (
-	stepsPlaced    = []ateapi.QuarantineStep{ateapi.QuarantineStep_QUARANTINE_STEP_HOLD, ateapi.QuarantineStep_QUARANTINE_STEP_MARKED}
-	stepsSuspended = []ateapi.QuarantineStep{ateapi.QuarantineStep_QUARANTINE_STEP_HOLD, ateapi.QuarantineStep_QUARANTINE_STEP_MARKED, ateapi.QuarantineStep_QUARANTINE_STEP_SUSPENDED}
+	stepsPlaced     = []ateapi.QuarantineStep{ateapi.QuarantineStep_QUARANTINE_STEP_HOLD, ateapi.QuarantineStep_QUARANTINE_STEP_MARKED}
+	stepsSuspended  = []ateapi.QuarantineStep{ateapi.QuarantineStep_QUARANTINE_STEP_HOLD, ateapi.QuarantineStep_QUARANTINE_STEP_MARKED, ateapi.QuarantineStep_QUARANTINE_STEP_SUSPENDED}
+	stepsTerminated = []ateapi.QuarantineStep{ateapi.QuarantineStep_QUARANTINE_STEP_HOLD, ateapi.QuarantineStep_QUARANTINE_STEP_MARKED, ateapi.QuarantineStep_QUARANTINE_STEP_TERMINATED}
 )
 
 func (f *receiptFixture) quarantine(principal string, req *ateapi.QuarantineActorRequest) (*ateapi.QuarantineActorResponse, error) {
@@ -116,6 +118,9 @@ func TestActorQuarantine_StaleActivation(t *testing.T) {
 	f.wantUnchanged(before)
 	if f.checkpoints() {
 		t.Errorf("a refused quarantine checkpointed the Actor")
+	}
+	if f.tc.fakeAtelet.TerminateCalled {
+		t.Errorf("a refused quarantine terminated the Actor")
 	}
 	actorRef := resources.ActorRefFromObjectRef(f.ref)
 	for _, id := range []string{"q-stale", "q-stale/suspend"} {
@@ -271,42 +276,215 @@ func TestActorQuarantine_NoCertificateAfterQuarantine(t *testing.T) {
 	}
 }
 
-// A quarantine whose suspend fails keeps the quarantine and returns the
-// error. Its retry finishes the receipt with the state the Actor reached,
-// without QUARANTINE_STEP_SUSPENDED, because this call did not stop the
-// activation.
+// A failed checkpoint falls back to terminating the same activation. A failed
+// terminate leaves the fallback pending, and a retry finishes it.
 func TestActorQuarantine_RetryAfterFailedSuspend(t *testing.T) {
 	f := newReceiptFixture(t, "ns-quarantine-failed")
 	activation := f.resume()
 	f.tc.fakeAtelet.Lock.Lock()
 	f.tc.fakeAtelet.FailCheckpoint = errors.New("checkpoint failed")
+	f.tc.fakeAtelet.FailTerminate = status.Error(codes.Unavailable, "terminate failed")
 	f.tc.fakeAtelet.Lock.Unlock()
 	if _, err := f.quarantine(detector, &ateapi.QuarantineActorRequest{ExpectedActivation: activation, RequestId: "q-1"}); err == nil {
-		t.Fatalf("QuarantineActor succeeded although its suspend failed")
+		t.Fatalf("QuarantineActor succeeded although termination failed")
 	}
 	failed := f.get()
 	if failed.GetStatus().GetQuarantine() == nil {
-		t.Fatalf("the failed suspend left no quarantine")
+		t.Fatalf("the failed termination left no quarantine")
 	}
 	stored, err := f.tc.persistence.GetActorLifecycleReceipt(f.ctx, resources.ActorRefFromObjectRef(f.ref), "q-1")
 	if err != nil {
 		t.Fatalf("quarantine receipt: %v", err)
 	}
-	if !cmp.Equal(stored.GetSteps(), stepsPlaced) || stored.GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
-		t.Errorf("receipt after the failed suspend = %v, want RUNNING with steps %v", stored, stepsPlaced)
+	if !cmp.Equal(stored.GetSteps(), stepsPlaced) || !stored.GetTerminatePending() {
+		t.Errorf("receipt after the failed terminate = %v, want pending with steps %v", stored, stepsPlaced)
 	}
 
 	f.tc.fakeAtelet.Lock.Lock()
-	f.tc.fakeAtelet.FailCheckpoint = nil
+	f.tc.fakeAtelet.FailTerminate = nil
+	f.tc.fakeAtelet.CheckpointCalled = false
 	f.tc.fakeAtelet.Lock.Unlock()
 	retried := f.mustQuarantine(&ateapi.QuarantineActorRequest{ExpectedActivation: activation, RequestId: "q-1"})
-	if got := retried.GetReceipt(); !cmp.Equal(got.GetSteps(), stepsPlaced) || got.GetState() != failed.GetStatus().GetState() {
-		t.Errorf("retried receipt = %v, want %v with steps %v", got, failed.GetStatus().GetState(), stepsPlaced)
+	if got := retried.GetReceipt(); !cmp.Equal(got.GetSteps(), stepsTerminated) || got.GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED || got.GetTerminatePending() {
+		t.Errorf("retried receipt = %v, want SUSPENDED with steps %v", got, stepsTerminated)
+	}
+	if f.checkpoints() {
+		t.Errorf("termination retry checkpointed the actor again")
+	}
+	if got := f.get().GetStatus(); got.GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED || got.GetActivationId() != "" {
+		t.Errorf("status after termination = %v, want SUSPENDED without activation", got)
 	}
 	// Finished, the receipt is returned as it is.
 	again := f.mustQuarantine(&ateapi.QuarantineActorRequest{ExpectedActivation: activation, RequestId: "q-1"})
 	if diff := cmp.Diff(retried.GetReceipt(), again.GetReceipt(), protocmp.Transform()); diff != "" {
 		t.Errorf("second retry (-first retry +second):\n%s", diff)
+	}
+}
+
+func TestActorQuarantine_ConcurrentTerminateRetries(t *testing.T) {
+	f := newReceiptFixture(t, "ns-quarantine-terminate-retries")
+	activation := f.resume()
+	f.tc.fakeAtelet.Lock.Lock()
+	f.tc.fakeAtelet.FailCheckpoint = errors.New("checkpoint failed")
+	f.tc.fakeAtelet.FailTerminate = status.Error(codes.Unavailable, "terminate failed")
+	f.tc.fakeAtelet.Lock.Unlock()
+	if _, err := f.quarantine(detector, &ateapi.QuarantineActorRequest{ExpectedActivation: activation, RequestId: "q-1"}); err == nil {
+		t.Fatal("QuarantineActor succeeded despite failed termination")
+	}
+	f.tc.fakeAtelet.Lock.Lock()
+	f.tc.fakeAtelet.FailTerminate = nil
+	f.tc.fakeAtelet.Lock.Unlock()
+	const calls = 4
+	receipts := make(chan *ateapi.LifecycleReceipt, calls)
+	errs := make(chan error, calls)
+	for range calls {
+		go func() {
+			resp, err := f.quarantine(detector, &ateapi.QuarantineActorRequest{ExpectedActivation: activation, RequestId: "q-1"})
+			if err != nil {
+				errs <- err
+				return
+			}
+			receipts <- resp.GetReceipt()
+		}()
+	}
+	var first *ateapi.LifecycleReceipt
+	for range calls {
+		select {
+		case err := <-errs:
+			wantCode(t, "concurrent retry", err, codes.Aborted)
+		case r := <-receipts:
+			if first == nil {
+				first = r
+			} else if diff := cmp.Diff(first, r, protocmp.Transform()); diff != "" {
+				t.Errorf("concurrent receipts differ (-first +other):\n%s", diff)
+			}
+		}
+	}
+	final := f.mustQuarantine(&ateapi.QuarantineActorRequest{ExpectedActivation: activation, RequestId: "q-1"}).GetReceipt()
+	if !cmp.Equal(final.GetSteps(), stepsTerminated) {
+		t.Errorf("receipt = %v, want terminated step", final)
+	}
+	if first != nil {
+		if diff := cmp.Diff(first, final, protocmp.Transform()); diff != "" {
+			t.Errorf("final receipt differs from concurrent receipt (-first +final):\n%s", diff)
+		}
+	}
+}
+
+func TestActorQuarantine_TerminatesAfterFailedCheckpoint(t *testing.T) {
+	f := newReceiptFixture(t, "ns-quarantine-terminate")
+	f.resume()
+	if _, err := f.suspend(&ateapi.SuspendActorRequest{Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}}); err != nil {
+		t.Fatalf("first SuspendActor: %v", err)
+	}
+	before := f.get().GetStatus().GetSnapshots()
+	activation := f.resume()
+	f.restores()
+	uid := f.get().GetMetadata().GetUid()
+	f.tc.fakeAtelet.Lock.Lock()
+	f.tc.fakeAtelet.FailCheckpoint = errors.New("checkpoint failed")
+	f.tc.fakeAtelet.TerminateCalled = false
+	f.tc.fakeAtelet.Lock.Unlock()
+	resp := f.mustQuarantine(&ateapi.QuarantineActorRequest{ExpectedUid: uid, ExpectedActivation: activation, RequestId: "q-1"})
+	if got := resp.GetReceipt(); !cmp.Equal(got.GetSteps(), stepsTerminated) || got.GetTerminatePending() || got.GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Fatalf("receipt = %v, want terminated suspension", got)
+	}
+	f.tc.fakeAtelet.Lock.Lock()
+	terminated := f.tc.fakeAtelet.TerminateCalled
+	terminatedUID := f.tc.fakeAtelet.TerminateRequest.GetActorUid()
+	f.tc.fakeAtelet.Lock.Unlock()
+	if !terminated || terminatedUID != uid {
+		t.Fatalf("atelet Terminate called = %t, UID = %q; want true, %q", terminated, terminatedUID, uid)
+	}
+	if got := f.get().GetStatus(); got.GetActivationId() != "" || got.GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED ||
+		len(got.GetSnapshots()) != len(before) || got.GetSnapshots()[0].GetUuid() != before[0].GetUuid() {
+		t.Fatalf("status = %v, want SUSPENDED with the last durable snapshot", got)
+	}
+	if _, err := f.releaseQuarantine(securityAdmin, "q-1", "release-1"); err != nil {
+		t.Fatalf("ReleaseQuarantine: %v", err)
+	}
+	if next := f.resume(); next == activation || next == "" {
+		t.Fatalf("next activation = %q, want new activation", next)
+	}
+	if !f.restores() {
+		t.Errorf("resume did not restore the durable snapshot")
+	}
+}
+
+func TestActorQuarantine_PendingTerminateRejectsLaterActivation(t *testing.T) {
+	f := newReceiptFixture(t, "ns-quarantine-later-activation")
+	activation := f.resume()
+	f.tc.fakeAtelet.Lock.Lock()
+	f.tc.fakeAtelet.FailCheckpoint = errors.New("checkpoint failed")
+	f.tc.fakeAtelet.FailTerminate = status.Error(codes.Unavailable, "terminate failed")
+	f.tc.fakeAtelet.Lock.Unlock()
+	if _, err := f.quarantine(detector, &ateapi.QuarantineActorRequest{ExpectedActivation: activation, RequestId: "q-1"}); err == nil {
+		t.Fatal("QuarantineActor succeeded despite failed termination")
+	}
+	current := f.get()
+	actorRef := resources.ActorRefFromObjectRef(f.ref)
+	if _, err := f.tc.persistence.UpdateActor(f.ctx, actorRef, store.PreconditionFrom(current), func(actor *ateapi.Actor) error {
+		actor.Status.ActivationId = "later-activation"
+		return nil
+	}); err != nil {
+		t.Fatalf("replace activation: %v", err)
+	}
+	f.tc.fakeAtelet.Lock.Lock()
+	f.tc.fakeAtelet.TerminateCalled = false
+	f.tc.fakeAtelet.FailTerminate = nil
+	f.tc.fakeAtelet.Lock.Unlock()
+	resp := f.mustQuarantine(&ateapi.QuarantineActorRequest{ExpectedActivation: activation, RequestId: "q-1"})
+	f.tc.fakeAtelet.Lock.Lock()
+	terminated := f.tc.fakeAtelet.TerminateCalled
+	f.tc.fakeAtelet.Lock.Unlock()
+	if terminated {
+		t.Error("pending termination reached the later activation")
+	}
+	if got := resp.GetReceipt(); got.GetTerminatePending() || slices.Contains(got.GetSteps(), ateapi.QuarantineStep_QUARANTINE_STEP_TERMINATED) {
+		t.Errorf("receipt = %v, want no terminated step", got)
+	}
+}
+
+// A stopped actor with a pending termination receipt cannot prove whether
+// this quarantine stopped it. The retry retains the pending receipt.
+func TestActorQuarantine_PendingTerminateOutcomeUnknown(t *testing.T) {
+	f := newReceiptFixture(t, "ns-quarantine-outcome-unknown")
+	activation := f.resume()
+	f.tc.fakeAtelet.Lock.Lock()
+	f.tc.fakeAtelet.FailCheckpoint = errors.New("checkpoint failed")
+	f.tc.fakeAtelet.FailTerminate = status.Error(codes.Unavailable, "terminate failed")
+	f.tc.fakeAtelet.Lock.Unlock()
+	if _, err := f.quarantine(detector, &ateapi.QuarantineActorRequest{ExpectedActivation: activation, RequestId: "q-1"}); err == nil {
+		t.Fatal("QuarantineActor succeeded despite failed termination")
+	}
+	actorRef := resources.ActorRefFromObjectRef(f.ref)
+	current := f.get()
+	if _, err := f.tc.persistence.UpdateActor(f.ctx, actorRef, store.PreconditionFrom(current), func(actor *ateapi.Actor) error {
+		actor.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+		actor.Status.ActivationId = ""
+		actor.Status.WorkerAssignment = nil
+		return nil
+	}); err != nil {
+		t.Fatalf("record stopped actor: %v", err)
+	}
+	f.tc.fakeAtelet.Lock.Lock()
+	f.tc.fakeAtelet.TerminateCalled = false
+	f.tc.fakeAtelet.FailTerminate = nil
+	f.tc.fakeAtelet.Lock.Unlock()
+	_, err := f.quarantine(detector, &ateapi.QuarantineActorRequest{ExpectedActivation: activation, RequestId: "q-1"})
+	wantCode(t, "retry with unknown termination outcome", err, codes.Aborted)
+	receipt, err := f.tc.persistence.GetActorLifecycleReceipt(f.ctx, actorRef, "q-1")
+	if err != nil {
+		t.Fatalf("quarantine receipt: %v", err)
+	}
+	if !receipt.GetTerminatePending() || !cmp.Equal(receipt.GetSteps(), stepsPlaced) {
+		t.Errorf("receipt = %v, want pending without terminated step", receipt)
+	}
+	f.tc.fakeAtelet.Lock.Lock()
+	terminated := f.tc.fakeAtelet.TerminateCalled
+	f.tc.fakeAtelet.Lock.Unlock()
+	if terminated {
+		t.Error("retry terminated an actor with an unknown outcome")
 	}
 }
 
@@ -419,6 +597,11 @@ func TestActorQuarantine_ReplacementUnaffected(t *testing.T) {
 	f := newReceiptFixture(t, "ns-quarantine-replace")
 	oldUID := f.get().GetMetadata().GetUid()
 	first := f.mustQuarantine(&ateapi.QuarantineActorRequest{ExpectedUid: oldUID, RequestId: "q-1"})
+	pending := proto.CloneOf(first.GetReceipt())
+	pending.TerminatePending = true
+	if err := f.tc.persistence.ReplaceActorHoldReceipt(f.ctx, resources.ActorRefFromObjectRef(f.ref), pending); err != nil {
+		t.Fatalf("ReplaceActorHoldReceipt: %v", err)
+	}
 	if _, err := f.releaseQuarantine(securityAdmin, "q-1", "release-1"); err != nil {
 		t.Fatalf("ReleaseQuarantine: %v", err)
 	}
@@ -427,10 +610,16 @@ func TestActorQuarantine_ReplacementUnaffected(t *testing.T) {
 	}
 	replacement := f.create()
 	before := f.get()
+	f.tc.fakeAtelet.Lock.Lock()
+	f.tc.fakeAtelet.TerminateCalled = false
+	f.tc.fakeAtelet.Lock.Unlock()
 
 	retried := f.mustQuarantine(&ateapi.QuarantineActorRequest{ExpectedUid: oldUID, RequestId: "q-1"})
-	if diff := cmp.Diff(first.GetReceipt(), retried.GetReceipt(), protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(pending, retried.GetReceipt(), protocmp.Transform()); diff != "" {
 		t.Errorf("retried receipt (-first +retry):\n%s", diff)
+	}
+	if f.tc.fakeAtelet.TerminateCalled {
+		t.Errorf("a retry terminated the replacement Actor")
 	}
 	_, err := f.quarantine(detector, &ateapi.QuarantineActorRequest{ExpectedUid: oldUID, RequestId: "q-2"})
 	wantCode(t, "QuarantineActor expecting the replaced uid", err, codes.FailedPrecondition)
@@ -458,6 +647,7 @@ func TestActorQuarantine_RetryAfterReleaseDoesNotSuspend(t *testing.T) {
 			ActivationId:     activation,
 			Transitioned:     true,
 			State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
+			TerminatePending: true,
 			Caller:           caller,
 			Reason:           "credential exfiltration",
 			Steps:            stepsPlaced,
@@ -480,6 +670,9 @@ func TestActorQuarantine_RetryAfterReleaseDoesNotSuspend(t *testing.T) {
 	}
 	if f.checkpoints() {
 		t.Errorf("a retry after the release suspended the Actor")
+	}
+	if f.tc.fakeAtelet.TerminateCalled {
+		t.Errorf("a retry after the release terminated the Actor")
 	}
 	f.wantUnchanged(before)
 }
