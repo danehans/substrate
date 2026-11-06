@@ -62,7 +62,10 @@ returns the error, the quarantine stays, and a retry with the same
   actor for every new tunnel and refuses a quarantined one.
 
 An update to the actor's egress policy is stored but does not lift any of
-this: the policy stays unreadable until the quarantine is released.
+this: the policy stays unreadable until the quarantine is released. An update
+needs the policy's `uid` and `version`, which a read can't return while the
+actor is quarantined, so use the values read before the quarantine, or update
+the policy after the release.
 
 ## What stops when the suspend finishes
 
