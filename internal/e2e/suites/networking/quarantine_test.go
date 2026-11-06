@@ -330,8 +330,11 @@ func quarantinePrincipal(t *testing.T, ctx context.Context, clients *e2e.Clients
 	return quarantineTestPrincipal{member: fmt.Sprintf("user:system:serviceaccount:%s:%s", namespace, name), api: client}
 }
 
-// assertQuarantineAudit waits for ate-api-server to log the
-// ate.actor.quarantine_changed record of action for requestID with incident.
+// assertQuarantineAudit waits for the ate.actor.quarantine_changed record of
+// action for requestID with incident. An install that exports actor events
+// with OTEL_LOGS_EXPORTER=otlp,console, as the kustomize kind install does,
+// writes it to ate-api-server's stdout. One that exports otlp only, as the
+// Helm chart does, sends it to the collector, whose debug exporter prints it.
 func assertQuarantineAudit(t *testing.T, ctx context.Context, clients *e2e.Clients, since metav1.Time, incident, requestID, action string) {
 	t.Helper()
 	namespace := e2e.SystemNamespace()
@@ -339,30 +342,59 @@ func assertQuarantineAudit(t *testing.T, ctx context.Context, clients *e2e.Clien
 	if err != nil {
 		t.Fatalf("getting the ate-api-server deployment: %v", err)
 	}
-	selector := labels.SelectorFromSet(deployment.Spec.Selector.MatchLabels).String()
+	apiServer := labels.SelectorFromSet(deployment.Spec.Selector.MatchLabels).String()
+	// stdout holds one JSON record per line.
+	inStdout := func(logs string) bool {
+		for line := range strings.SplitSeq(logs, "\n") {
+			if strings.Contains(line, "Actor quarantine changed") &&
+				strings.Contains(line, `"ate.actor.quarantine.action":"`+action+`"`) &&
+				strings.Contains(line, `"ate.actor.quarantine.request_id":"`+requestID+`"`) &&
+				strings.Contains(line, `"ate.actor.quarantine.incident_id":"`+incident+`"`) {
+				return true
+			}
+		}
+		return false
+	}
+	// The debug exporter prints each record's attributes on lines of their
+	// own, under a "LogRecord #" header.
+	inCollector := func(logs string) bool {
+		for _, record := range strings.Split(logs, "LogRecord #") {
+			if strings.Contains(record, "ate.actor.quarantine_changed") &&
+				strings.Contains(record, "ate.actor.quarantine.action: Str("+action+")") &&
+				strings.Contains(record, "ate.actor.quarantine.request_id: Str("+requestID+")") &&
+				strings.Contains(record, "ate.actor.quarantine.incident_id: Str("+incident+")") {
+				return true
+			}
+		}
+		return false
+	}
+	sources := []struct {
+		namespace, selector string
+		found               func(string) bool
+	}{
+		{namespace, apiServer, inStdout},
+		{"otel-system", "app=opentelemetry-collector", inCollector},
+	}
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		pods, err := clients.K8s.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
-		if err != nil {
-			t.Fatalf("listing ate-api-server pods: %v", err)
-		}
-		for _, pod := range pods.Items {
-			logs, err := clients.K8s.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{Container: pod.Spec.Containers[0].Name, SinceTime: &since}).DoRaw(ctx)
+		for _, source := range sources {
+			pods, err := clients.K8s.CoreV1().Pods(source.namespace).List(ctx, metav1.ListOptions{LabelSelector: source.selector})
 			if err != nil {
-				t.Fatalf("reading logs of %s: %v", pod.Name, err)
+				t.Fatalf("listing pods %s in %s: %v", source.selector, source.namespace, err)
 			}
-			for line := range strings.SplitSeq(string(logs), "\n") {
-				if strings.Contains(line, "Actor quarantine changed") &&
-					strings.Contains(line, `"ate.actor.quarantine.action":"`+action+`"`) &&
-					strings.Contains(line, `"ate.actor.quarantine.request_id":"`+requestID+`"`) &&
-					strings.Contains(line, `"ate.actor.quarantine.incident_id":"`+incident+`"`) {
-					t.Logf("audit record: %s", line)
+			for _, pod := range pods.Items {
+				logs, err := clients.K8s.CoreV1().Pods(source.namespace).GetLogs(pod.Name, &corev1.PodLogOptions{Container: pod.Spec.Containers[0].Name, SinceTime: &since}).DoRaw(ctx)
+				if err != nil {
+					t.Fatalf("reading logs of %s/%s: %v", source.namespace, pod.Name, err)
+				}
+				if source.found(string(logs)) {
+					t.Logf("audit record %s for %s found in %s/%s", action, requestID, source.namespace, pod.Name)
 					return
 				}
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no ate.actor.quarantine_changed %s record for %s with incident %s in ate-api-server logs", action, requestID, incident)
+			t.Fatalf("no ate.actor.quarantine_changed %s record for %s with incident %s in ate-api-server's stdout or the collector's debug output", action, requestID, incident)
 		}
 		time.Sleep(time.Second)
 	}
