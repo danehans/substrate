@@ -59,7 +59,10 @@ returns the error, the quarantine stays, and a retry with the same
   and denies on that error. This holds for tunnels opened before the
   quarantine, and for TLS passthrough, whose handshake is checked.
 - **New egress tunnels through atenet**, the kustomize gateway. It reads the
-  actor for every new tunnel and refuses a quarantined one.
+  actor for every new tunnel and refuses a quarantined one. It also compares
+  the verified worker certificate's actor UID and, when present, activation
+  with the current Actor. An old certificate cannot open a tunnel after a
+  same-name replacement or a new activation.
 
 An update to the actor's egress policy is stored but does not lift any of
 this: the policy stays unreadable until the quarantine is released. An update

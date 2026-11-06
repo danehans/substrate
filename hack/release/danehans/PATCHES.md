@@ -39,9 +39,12 @@ names its upstream proposal and the condition that retires it.
    unless it equals the Actor's current `activation_id` (an empty ID matches
    only an Actor with none), which also ends atunnel's renewal loop. The
    issued certificate's `ActorIdentity` extension carries it as
-   `ActivationId`, omitted when empty. Gateways that identify the actor from
-   the URI SAN (atenet egress, and agentgateway at both the base pin and the
-   `images.agentgateway` revision) are unaffected.
+   `ActivationId`, omitted when empty. atenet now checks the extension's UID
+   and optional activation against the Actor on every CONNECT. The base
+   release issues the `ActorIdentity` extension without `ActivationId`, so
+   those certificates receive the UID check only. A missing or malformed
+   extension is refused. The chart's agentgateway still identifies the actor
+   from the URI SAN and does not apply this CONNECT check.
    - Upstream proposal:
      [agent-substrate/substrate#1041](https://github.com/agent-substrate/substrate/issues/1041)
      (the certificate half of the authenticated per-run identity).

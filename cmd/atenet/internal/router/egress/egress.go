@@ -47,6 +47,7 @@ import (
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/egresspolicy"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/substratex509"
 )
 
 const (
@@ -157,7 +158,7 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 			"egress unavailable: actor-identity CA failed to load")
 	}
 
-	actorRef, err := authenticateActorCertificate(md, roots)
+	certified, err := authenticateActorCertificate(md, roots)
 	if err != nil {
 		// The body stays generic on purpose: an actor that fails authentication
 		// has not proven it is anyone, so it gets no detail about why. The
@@ -168,7 +169,8 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 			"egress denied: invalid actor certificate")
 	}
 
-	if err := h.validateActor(ctx, actorRef, md.Host); err != nil {
+	actorRef := certified.ref
+	if err := h.validateActor(ctx, certified, md.Host); err != nil {
 		return extproc.Result{}, err
 	}
 
@@ -272,11 +274,11 @@ func (h *Handler) lookupPolicy(ctx context.Context, leg string, ref resources.Ac
 	return policy, nil
 }
 
-// validateActor checks the actor certified by the certificate against the control
-// plane's current view of that actor: it still exists and it is placed on a
-// worker. A refusal is logged with destination. Every error it returns is
-// already a client-facing ext_proc denial.
-func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef, destination string) error {
+// validateActor checks the certified UID and optional activation against the
+// current Actor, then checks that the Actor is placed on a worker. Every error
+// it returns is already a client-facing ext_proc denial.
+func (h *Handler) validateActor(ctx context.Context, certified certifiedActor, destination string) error {
+	actorRef := certified.ref
 	// Confirm the certified actor still exists.
 	// TODO: this can cause heavy load on ate api server. Change it based on https://github.com/agent-substrate/substrate/issues/592.
 	actor, err := h.apiClient.GetActor(ctx, &ateapi.GetActorRequest{
@@ -284,6 +286,20 @@ func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef
 	})
 	if err != nil {
 		return mapEgressIdentityError(actorRef.Atespace, actorRef.Name, err)
+	}
+	identity, identityErr := substratex509.ActorIdentityFromCertificate(certified.leaf)
+	certificateUID, certificateActivation := "", ""
+	if identity != nil {
+		certificateUID, certificateActivation = identity.ActorUid, identity.ActivationId
+	}
+	currentUID := actor.GetMetadata().GetUid()
+	currentActivation := actor.GetStatus().GetActivationId()
+	if identityErr != nil || identity == nil || identity.Atespace != actorRef.Atespace || identity.ActorName != actorRef.Name || certificateUID != currentUID || (certificateActivation != "" && certificateActivation != currentActivation) {
+		slog.WarnContext(ctx, "egress denied: actor certificate identity does not match current actor",
+			slog.Any("actor", actorRef), slog.String("certificate_uid", certificateUID), slog.String("actor_uid", currentUID),
+			slog.String("certificate_activation", certificateActivation), slog.String("actor_activation", currentActivation),
+			slog.String("destination", destination), slog.Any("identity_error", identityErr))
+		return extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
 	}
 
 	// A quarantined actor gets no new tunnel, whatever its state. Requests
@@ -311,31 +327,35 @@ func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef
 	}
 }
 
-// authenticateActorCertificate turns the mTLS peer certificate Envoy recorded
-// on the request into a verified ActorRef, or an error describing why it
-// cannot be trusted.
-func authenticateActorCertificate(md *extproc.RequestMetadata, roots *x509.CertPool) (resources.ActorRef, error) {
+type certifiedActor struct {
+	ref  resources.ActorRef
+	leaf *x509.Certificate
+}
+
+// authenticateActorCertificate returns the verified peer certificate and the
+// ActorRef from its SPIFFE URI, or an error describing why it cannot be trusted.
+func authenticateActorCertificate(md *extproc.RequestMetadata, roots *x509.CertPool) (certifiedActor, error) {
 	if certificate := md.Attribute(agentgatewayClientCertificateAttribute); certificate != "" {
 		chain, err := parseCertificateChainPEM([]byte(certificate))
 		if err != nil {
-			return resources.ActorRef{}, err
+			return certifiedActor{}, err
 		}
 		return verifyActorCertificate(chain, roots)
 	}
 	header := md.Header(forwardedClientCertHeader)
 	if header == "" {
-		return resources.ActorRef{}, fmt.Errorf("request carries no %s header", forwardedClientCertHeader)
+		return certifiedActor{}, fmt.Errorf("request carries no %s header", forwardedClientCertHeader)
 	}
 	chain, err := parseXFCCChain(header)
 	if err != nil {
-		return resources.ActorRef{}, err
+		return certifiedActor{}, err
 	}
 	return verifyActorCertificate(chain, roots)
 }
 
 // verifyActorCertificate checks that chain[0] is a live, non-CA, client-auth
 // worker actor certificate issued by the actor-identity CA, and returns the
-// ActorRef from its SPIFFE URI.
+// verified leaf and ActorRef from its SPIFFE URI.
 //
 // The chain is verified here even though Envoy already did it at the handshake
 // (require_client_certificate with the actor-identity CA as trusted_ca). We have
@@ -344,7 +364,7 @@ func authenticateActorCertificate(md *extproc.RequestMetadata, roots *x509.CertP
 // It also keeps the handler safe if the Envoy config is ever loosened, and costs
 // one signature check per CONNECT rather than per request. The IsCA, ClientAuth-EKU,
 // and worker SPIFFE URI checks below have no Envoy-side equivalent at all.
-func verifyActorCertificate(chain []*x509.Certificate, roots *x509.CertPool) (resources.ActorRef, error) {
+func verifyActorCertificate(chain []*x509.Certificate, roots *x509.CertPool) (certifiedActor, error) {
 	leaf := chain[0]
 	intermediates := x509.NewCertPool()
 	for _, cert := range chain[1:] {
@@ -353,14 +373,14 @@ func verifyActorCertificate(chain []*x509.Certificate, roots *x509.CertPool) (re
 
 	now := time.Now()
 	if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
-		return resources.ActorRef{}, fmt.Errorf("actor certificate is outside its validity period (%s..%s)",
+		return certifiedActor{}, fmt.Errorf("actor certificate is outside its validity period (%s..%s)",
 			leaf.NotBefore.Format(time.RFC3339), leaf.NotAfter.Format(time.RFC3339))
 	}
 	// An actor certificate is an end-entity credential. Refusing IsCA here stops
 	// a leaked or mis-issued CA certificate from being replayed as a leaf: chain
 	// verification alone would happily accept one.
 	if leaf.IsCA {
-		return resources.ActorRef{}, fmt.Errorf("actor certificate is a CA certificate")
+		return certifiedActor{}, fmt.Errorf("actor certificate is a CA certificate")
 	}
 
 	if _, err := leaf.Verify(x509.VerifyOptions{
@@ -369,19 +389,19 @@ func verifyActorCertificate(chain []*x509.Certificate, roots *x509.CertPool) (re
 		CurrentTime:   now,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}); err != nil {
-		return resources.ActorRef{}, fmt.Errorf("actor certificate is not signed by the actor-identity CA: %w", err)
+		return certifiedActor{}, fmt.Errorf("actor certificate is not signed by the actor-identity CA: %w", err)
 	}
 
 	// Check that this is a worker certificate --- the SPIFFE URI should be of
 	// the form `spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}`.
 	if len(leaf.URIs) != 1 {
-		return resources.ActorRef{}, fmt.Errorf("actor certificate has %d URI SANs, want 1", len(leaf.URIs))
+		return certifiedActor{}, fmt.Errorf("actor certificate has %d URI SANs, want 1", len(leaf.URIs))
 	}
 	ref, err := resources.ActorRefFromWorkerForActorSPIFFEURL(leaf.URIs[0])
 	if err != nil {
-		return resources.ActorRef{}, fmt.Errorf("while parsing actor from SPIFFE ID: %w", err)
+		return certifiedActor{}, fmt.Errorf("while parsing actor from SPIFFE ID: %w", err)
 	}
-	return ref, nil
+	return certifiedActor{ref: ref, leaf: leaf}, nil
 }
 
 // parseXFCCChain extracts the presented certificate chain, leaf first, from an
