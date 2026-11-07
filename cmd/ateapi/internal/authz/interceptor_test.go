@@ -438,6 +438,7 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 		{"outsider", "editor", AtespaceObject("team-b")},
 		{"outsider-with-viewer", "editor", AtespaceObject("team-b")},
 		{"outsider-with-viewer", "viewer", AtespaceObject("team-a")},
+		{"quarantine-admin", "quarantine_admin", AtespaceObject("team-a")},
 	} {
 		writeTestTuple(t, ctx, pool, policyManager, g.user, g.role, g.object)
 	}
@@ -452,6 +453,7 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 	suspend := rpcCall{ateapi.Control_SuspendActor_FullMethodName, &ateapi.SuspendActorRequest{Actor: actor}}
 	revert := rpcCall{ateapi.Control_RevertActor_FullMethodName, &ateapi.RevertActorRequest{Actor: actor}}
 	getEgress := rpcCall{ateapi.Control_GetActorEgressPolicy_FullMethodName, &ateapi.GetActorEgressPolicyRequest{Actor: actor}}
+	inspectQuarantinedEgress := rpcCall{ateapi.Control_InspectQuarantinedActorEgressPolicy_FullMethodName, &ateapi.InspectQuarantinedActorEgressPolicyRequest{Actor: actor}}
 	createEgress := rpcCall{ateapi.Control_CreateActorEgressPolicy_FullMethodName, &ateapi.CreateActorEgressPolicyRequest{Actor: actor}}
 	updateEgress := rpcCall{ateapi.Control_UpdateActorEgressPolicy_FullMethodName, &ateapi.UpdateActorEgressPolicyRequest{Actor: actor}}
 	deleteEgress := rpcCall{ateapi.Control_DeleteActorEgressPolicy_FullMethodName, &ateapi.DeleteActorEgressPolicyRequest{Actor: actor}}
@@ -517,6 +519,9 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 
 		// Egress policies: viewers read, editors write.
 		{"viewer gets egress policy", "viewer", getEgress, codes.OK},
+		{"quarantine admin gets stored policy", "quarantine-admin", inspectQuarantinedEgress, codes.OK},
+		{"viewer cannot get stored policy", "viewer", inspectQuarantinedEgress, codes.PermissionDenied},
+		{"global owner cannot get stored policy", "global-owner", inspectQuarantinedEgress, codes.PermissionDenied},
 		{"global viewer gets egress policy", "global-viewer", getEgress, codes.OK},
 		{"outsider cannot get egress policy", "outsider", getEgress, codes.PermissionDenied},
 		{"editor creates egress policy", "editor", createEgress, codes.OK},
@@ -647,6 +652,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 	resume := rpcCall{ateapi.Control_ResumeActor_FullMethodName, &ateapi.ResumeActorRequest{Actor: actor}}
 	suspend := rpcCall{ateapi.Control_SuspendActor_FullMethodName, &ateapi.SuspendActorRequest{Actor: actor}}
 	getEgress := rpcCall{ateapi.Control_GetActorEgressPolicy_FullMethodName, &ateapi.GetActorEgressPolicyRequest{Actor: actor}}
+	inspectQuarantinedEgress := rpcCall{ateapi.Control_InspectQuarantinedActorEgressPolicy_FullMethodName, &ateapi.InspectQuarantinedActorEgressPolicyRequest{Actor: actor}}
 	updateEgress := rpcCall{ateapi.Control_UpdateActorEgressPolicy_FullMethodName, &ateapi.UpdateActorEgressPolicyRequest{Actor: actor}}
 	createWorker := rpcCall{ateapi.Control_CreateWorker_FullMethodName, &ateapi.CreateWorkerRequest{}}
 	listWorkers := rpcCall{ateapi.Control_ListWorkers_FullMethodName, &ateapi.ListWorkersRequest{}}
@@ -691,6 +697,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		// atenet-egress reads actors and their egress policies.
 		{"egress gateway gets actor", mtls(egressID), getActor, codes.OK},
 		{"egress gateway gets egress policy", mtls(egressID), getEgress, codes.OK},
+		{"egress gateway cannot get stored policy", mtls(egressID), inspectQuarantinedEgress, codes.PermissionDenied},
 		{"egress gateway cannot update egress policy", mtls(egressID), updateEgress, codes.PermissionDenied},
 		{"egress gateway cannot delete actor", mtls(egressID), deleteActor, codes.PermissionDenied},
 		{"egress gateway cannot resume actor", mtls(egressID), resume, codes.PermissionDenied},
@@ -713,6 +720,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		// atelet reads egress policies for the worker that enforces them, and
 		// nothing else.
 		{"atelet gets egress policy", mtls(ateletID), getEgress, codes.OK},
+		{"atelet cannot get stored policy", mtls(ateletID), inspectQuarantinedEgress, codes.PermissionDenied},
 		{"atelet cannot update egress policy", mtls(ateletID), updateEgress, codes.PermissionDenied},
 		{"atelet cannot get actor", mtls(ateletID), getActor, codes.PermissionDenied},
 		{"atelet cannot list actors", mtls(ateletID), listAllActors, codes.PermissionDenied},

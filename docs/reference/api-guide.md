@@ -865,6 +865,33 @@ Every ate-api-server replica must support holds before a client places one. A re
 
 Each hold placed and each hold released writes an `ate.actor.hold_changed` event with the caller, holder, reason, incident and request IDs. See `docs/metrics/registry/events.yaml`.
 
+#### Actor quarantine
+
+A quarantine is a hold with the holder `quarantine` that restricts lifecycle and credential operations and keeps snapshots. An actor has at most one. These downstream controls are experimental, unqualified, and development only. Every control-plane replica must implement them before use; mixed unpatched writers can discard the state or bypass the restrictions. This API does not by itself guarantee revocation of existing network connections.
+
+`QuarantineActor` quarantines an actor.
+*   **Request:** `QuarantineActorRequest`
+    *   `actor`: `ObjectRef` of the actor.
+    *   `reason`: why the actor is quarantined.
+    *   `incident_id`: (Optional) the incident the quarantine belongs to.
+    *   `expected_uid`, `expected_activation`: (Optional) as in [Conditional suspend and resume](#conditional-suspend-and-resume). They are checked in the write that places the quarantine, and the suspend stops only that activation.
+    *   `request_id`: names the quarantine, at most 120 characters.
+*   **Response:** `QuarantineActorResponse` containing the `Actor` and a `LifecycleReceipt` with the `caller`, `reason`, the quarantine `hold`, `quarantine`, the `activation_id` the call found, and `steps`.
+*   One write places the quarantine hold, sets `status.quarantine` and stores the receipt, with `QUARANTINE_STEP_HOLD` and `QUARANTINE_STEP_MARKED`. If the actor is `RUNNING`, ateapi then suspends that activation asynchronously, under `request_id` and `/suspend`, and replaces the receipt with one that adds `QUARANTINE_STEP_SUSPENDED` and the suspend's state, mode and `snapshot_durable`.
+*   If the suspend fails while the activation remains assigned, ateapi terminates that workload. This discards its memory state. The receipt adds `QUARANTINE_STEP_TERMINATED` and the actor becomes `SUSPENDED`. A failed termination leaves `terminate_pending` in the receipt; a retry with the same `request_id` continues termination. After release, the next resume restores the last completed durable snapshot under a new activation. If no durable snapshot exists, it starts from the template.
+*   If the workload stops but the final receipt cannot be stored, a retry returns `ABORTED` with an unknown outcome and keeps `terminate_pending`. A missing Node object does not count as confirmed termination.
+*   A `REVERTING` actor returns `FAILED_PRECONDITION`: retry once the revert finishes. A retry continues an unfinished suspend only while the quarantine is in place.
+*   A retry returns the original receipt, including after the release, and does nothing else. A different caller, reason, incident or condition under the same `request_id` returns `ALREADY_EXISTS`, and so does a quarantine of an actor that is already quarantined under another `request_id`.
+
+`ReleaseQuarantine` releases the quarantine named by `quarantine_request_id`, with a `reason` and a `request_id`. It does not resume the actor. `transitioned` is false, and nothing changes, if the actor has no such quarantine. `ReleaseActorHold` can't release the quarantine hold: its holder is no caller.
+
+While an actor is quarantined:
+
+*   `ResumeActor` and `DeleteActor` fail as for a hold, with metadata `cause: ACTOR_QUARANTINED`. `RevertActor`, `CreateTag` from the actor, `MintActorJwt` and `GetActorEgressPolicy` fail the same way, and `MintWorkerActorCertificate` is refused with `FAILED_PRECONDITION`. A `quarantine_admin` can use `InspectQuarantinedActorEgressPolicy` to read the stored policy with its `uid` and `version`. An editor can update the policy with that metadata; the update does not lift the quarantine.
+*   A suspend keeps the snapshots it replaces in object storage.
+
+Each quarantine, each suspend or terminate it finishes, each release, and each resume it refuses before the resume writes anything, writes an `ate.actor.quarantine_changed` event. See `docs/metrics/registry/events.yaml`.
+
 #### `GetActor` / `ListActors`
 Query the state of logical actors.
 *   **GetActor:** Retrieves a single actor by ID.

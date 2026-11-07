@@ -175,6 +175,8 @@ type actor
     # authorizing atelet on the node hosting the actor as MintWorkerActorJwt
     # does, have atelet check the requesting worker, and drop atelet here.
     define can_get_egress_policy: viewer from parent_atespace or egress_gateway from parent_atespace or atelet from parent_atespace
+    # InspectQuarantinedActorEgressPolicy uses this separate operator grant.
+    define can_get_quarantined_egress_policy: quarantine_admin from parent_atespace
     define can_create_egress_policy: editor from parent_atespace
     define can_update_egress_policy: editor from parent_atespace
     define can_delete_egress_policy: editor from parent_atespace
