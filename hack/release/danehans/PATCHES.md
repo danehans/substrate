@@ -43,8 +43,9 @@ names its upstream proposal and the condition that retires it.
    and optional activation against the Actor on every CONNECT. The base
    release issues the `ActorIdentity` extension without `ActivationId`, so
    those certificates receive the UID check only. A missing or malformed
-   extension is refused. The chart's agentgateway still identifies the actor
-   from the URI SAN and does not apply this CONNECT check.
+   extension is refused. The chart's agentgateway checks the certificate's
+   actor UID and optional activation against the actor on each CONNECT and
+   refuses quarantined actors before dialing upstream.
    - Upstream proposal:
      [agent-substrate/substrate#1041](https://github.com/agent-substrate/substrate/issues/1041)
      (the certificate half of the authenticated per-run identity).
@@ -95,7 +96,9 @@ names its upstream proposal and the condition that retires it.
    - Upstream proposal:
      [agentgateway/agentgateway#4289](https://github.com/agentgateway/agentgateway/issues/4289)
      (expose the applied Substrate egress policy's UID and version to CEL and
-     ext_proc).
+     ext_proc), and
+     [solo-io/picket#215](https://github.com/solo-io/picket/issues/215)
+     (certificate and quarantine checks at CONNECT).
    - Replacement condition: an agentgateway release contains the change and
      a `kagent-dev/substrate` release bundles that gateway; the default then
      returns to the base chart's gateway.
