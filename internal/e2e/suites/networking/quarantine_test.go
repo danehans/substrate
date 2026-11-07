@@ -90,12 +90,6 @@ func TestActorQuarantine(t *testing.T) {
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 	waitForActorRoute(t, ctx, router, actorRef)
-	// An update needs the policy's uid and version, which the policy read
-	// can't return once the Actor is quarantined.
-	stored, err := api.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
-	if err != nil {
-		t.Fatalf("GetActorEgressPolicy: %v", err)
-	}
 
 	// The demo's /post sends its body 15s after opening the passthrough
 	// tunnel, so the tunnel stays open across the quarantine.
@@ -194,18 +188,6 @@ func TestActorQuarantine(t *testing.T) {
 	wantQuarantinedRefusal(t, "DeleteActor", err)
 	_, err = api.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
 	wantQuarantinedRefusal(t, "GetActorEgressPolicy", err)
-	// An ordinary policy update is stored and does not lift it.
-	stored.Rules = append(stored.Rules, e2e.EgressAllowHTTP("*"))
-	if _, err := api.UpdateActorEgressPolicy(ctx, &ateapi.UpdateActorEgressPolicyRequest{Actor: ref, EgressPolicy: stored}); err != nil {
-		t.Fatalf("UpdateActorEgressPolicy: %v", err)
-	}
-	_, err = api.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
-	wantQuarantinedRefusal(t, "GetActorEgressPolicy after a policy update", err)
-
-	// The audit event names the incident, request, caller and steps.
-	assertQuarantineAudit(t, ctx, clients, since, incident, requestID, "quarantined")
-	assertQuarantineAudit(t, ctx, clients, since, incident, requestID, "suspended")
-
 	// Release: neither the bootstrap owner nor a quarantine_manager can, a
 	// quarantine_admin can.
 	namespace := e2e.CreateNamespace(t).Name
@@ -216,18 +198,11 @@ func TestActorQuarantine(t *testing.T) {
 		Bindings: []*ateapi.Binding{
 			{Role: "quarantine_manager", Members: []string{manager.member}},
 			{Role: "quarantine_admin", Members: []string{admin.member}},
+			{Role: "editor", Members: []string{admin.member}},
 		},
 	}
 	if _, err := api.CreateAtespaceAccessPolicy(ctx, &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: &ateapi.ObjectRef{Name: atespace}, AccessPolicy: policy}); err != nil {
 		t.Fatalf("CreateAtespaceAccessPolicy: %v", err)
-	}
-	release := func(client *ateclient.Client, id string) (*ateapi.ReleaseQuarantineResponse, error) {
-		return client.ReleaseQuarantine(ctx, &ateapi.ReleaseQuarantineRequest{
-			Actor: ref, QuarantineRequestId: requestID, Reason: "e2e: investigation closed", ExpectedUid: uid, RequestId: id,
-		})
-	}
-	if _, err := release(api, "release-owner"); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("ReleaseQuarantine as the bootstrap owner: %v, want PermissionDenied", err)
 	}
 	// Wait until the grants are in effect: each role also grants viewer.
 	for _, p := range []quarantineTestPrincipal{manager, admin} {
@@ -242,6 +217,31 @@ func TestActorQuarantine(t *testing.T) {
 			}
 			time.Sleep(time.Second)
 		}
+	}
+	// Read the stored policy after quarantine, including update metadata.
+	stored, err := admin.api.GetQuarantinedActorEgressPolicy(ctx, &ateapi.GetQuarantinedActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
+	if err != nil {
+		t.Fatalf("GetQuarantinedActorEgressPolicy: %v", err)
+	}
+	// An ordinary policy update is stored and does not lift it.
+	stored.Rules = append(stored.Rules, e2e.EgressAllowHTTP("*"))
+	if _, err := admin.api.UpdateActorEgressPolicy(ctx, &ateapi.UpdateActorEgressPolicyRequest{Actor: ref, EgressPolicy: stored}); err != nil {
+		t.Fatalf("UpdateActorEgressPolicy: %v", err)
+	}
+	_, err = api.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
+	wantQuarantinedRefusal(t, "GetActorEgressPolicy after a policy update", err)
+
+	// The audit event names the incident, request, caller and steps.
+	assertQuarantineAudit(t, ctx, clients, since, incident, requestID, "quarantined")
+	assertQuarantineAudit(t, ctx, clients, since, incident, requestID, "suspended")
+
+	release := func(client *ateclient.Client, id string) (*ateapi.ReleaseQuarantineResponse, error) {
+		return client.ReleaseQuarantine(ctx, &ateapi.ReleaseQuarantineRequest{
+			Actor: ref, QuarantineRequestId: requestID, Reason: "e2e: investigation closed", ExpectedUid: uid, RequestId: id,
+		})
+	}
+	if _, err := release(api, "release-owner"); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ReleaseQuarantine as the bootstrap owner: %v, want PermissionDenied", err)
 	}
 	if _, err := release(manager.api, "release-manager"); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("ReleaseQuarantine as quarantine_manager: %v, want PermissionDenied", err)

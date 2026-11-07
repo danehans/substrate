@@ -267,6 +267,9 @@ var defaultRPCPermissions = map[string]rpcRule{
 	ateapi.Control_GetActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapi.GetActorEgressPolicyRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanGetEgressPolicy, r.GetActor(), field.NewPath("actor"))
 	})),
+	ateapi.Control_GetQuarantinedActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapi.GetQuarantinedActorEgressPolicyRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanGetQuarantinedEgressPolicy, r.GetActor(), field.NewPath("actor"))
+	})),
 	ateapi.Control_CreateActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapi.CreateActorEgressPolicyRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanCreateEgressPolicy, r.GetActor(), field.NewPath("actor"))
 	})),

@@ -67,6 +67,9 @@ names its upstream proposal and the condition that retires it.
    new `quarantine_admin` role. It builds on the actor holds from
    [agent-substrate/substrate#3066](https://github.com/agent-substrate/substrate/issues/3066). See
    [actor quarantine](../../../docs/guides/actor-quarantine.md).
+   A separate `GetQuarantinedActorEgressPolicy` read lets
+   `quarantine_admin` inspect the stored policy and its update metadata.
+   `GetActorEgressPolicy` remains refused for every caller while quarantined.
    - Upstream proposal:
      [agent-substrate/substrate#3463](https://github.com/agent-substrate/substrate/issues/3463).
    - Replacement condition: a `kagent-dev/substrate` release quarantines

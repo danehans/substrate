@@ -72,11 +72,11 @@ stop to this quarantine without a receipt.
   with the current Actor. An old certificate cannot open a tunnel after a
   same-name replacement or a new activation.
 
-An update to the actor's egress policy is stored but does not lift any of
-this: the policy stays unreadable until the quarantine is released. An update
-needs the policy's `uid` and `version`, which a read can't return while the
-actor is quarantined, so use the values read before the quarantine, or update
-the policy after the release.
+A `quarantine_admin` can call `GetQuarantinedActorEgressPolicy` to read the
+stored policy, including its `uid` and `version`. Give the same operator the
+`editor` role to update the policy with that metadata. The update does not
+lift the quarantine, and `GetActorEgressPolicy` remains refused for every
+caller.
 
 ## What stops when the workload stops
 

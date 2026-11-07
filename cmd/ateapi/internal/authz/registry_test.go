@@ -198,6 +198,12 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			want:       []check{{RelationCanGetEgressPolicy, "actor:team-a/runner"}},
 		},
 		{
+			name:       "GetQuarantinedActorEgressPolicy",
+			fullMethod: ateapi.Control_GetQuarantinedActorEgressPolicy_FullMethodName,
+			req:        &ateapi.GetQuarantinedActorEgressPolicyRequest{Actor: actorRef},
+			want:       []check{{RelationCanGetQuarantinedEgressPolicy, "actor:team-a/runner"}},
+		},
+		{
 			name:       "CreateActorEgressPolicy",
 			fullMethod: ateapi.Control_CreateActorEgressPolicy_FullMethodName,
 			req:        &ateapi.CreateActorEgressPolicyRequest{Actor: actorRef},
