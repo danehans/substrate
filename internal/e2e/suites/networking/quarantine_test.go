@@ -219,10 +219,11 @@ func TestActorQuarantine(t *testing.T) {
 		}
 	}
 	// Read the stored policy after quarantine, including update metadata.
-	stored, err := admin.api.GetQuarantinedActorEgressPolicy(ctx, &ateapi.GetQuarantinedActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
+	inspection, err := admin.api.InspectQuarantinedActorEgressPolicy(ctx, &ateapi.InspectQuarantinedActorEgressPolicyRequest{Actor: ref, Name: resources.SingletonName})
 	if err != nil {
-		t.Fatalf("GetQuarantinedActorEgressPolicy: %v", err)
+		t.Fatalf("InspectQuarantinedActorEgressPolicy: %v", err)
 	}
+	stored := inspection.GetEgressPolicy()
 	// An ordinary policy update is stored and does not lift it.
 	stored.Rules = append(stored.Rules, e2e.EgressAllowHTTP("*"))
 	if _, err := admin.api.UpdateActorEgressPolicy(ctx, &ateapi.UpdateActorEgressPolicyRequest{Actor: ref, EgressPolicy: stored}); err != nil {

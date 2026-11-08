@@ -72,7 +72,7 @@ stop to this quarantine without a receipt.
   with the current Actor. An old certificate cannot open a tunnel after a
   same-name replacement or a new activation.
 
-A `quarantine_admin` can call `GetQuarantinedActorEgressPolicy` to read the
+A `quarantine_admin` can call `InspectQuarantinedActorEgressPolicy` to read the
 stored policy, including its `uid` and `version`. Give the same operator the
 `editor` role to update the policy with that metadata. The update does not
 lift the quarantine, and `GetActorEgressPolicy` remains refused for every

@@ -37,9 +37,9 @@ func ValidateGetActorEgressPolicyRequest(ctx context.Context, req *ateapi.GetAct
 	return Validate_GetActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateGetQuarantinedActorEgressPolicyRequest(ctx context.Context, req *ateapi.GetQuarantinedActorEgressPolicyRequest) field.ErrorList {
+func ValidateInspectQuarantinedActorEgressPolicyRequest(ctx context.Context, req *ateapi.InspectQuarantinedActorEgressPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
-	return Validate_GetQuarantinedActorEgressPolicyRequest(ctx, op, nil, req, nil)
+	return Validate_InspectQuarantinedActorEgressPolicyRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateUpdateActorEgressPolicyRequest(ctx context.Context, req *ateapi.UpdateActorEgressPolicyRequest) field.ErrorList {
@@ -90,7 +90,7 @@ func ValidateCustom_GetActorEgressPolicyRequest_Name(_ context.Context, _ operat
 	return validateSingletonName(p, *name)
 }
 
-func ValidateCustom_GetQuarantinedActorEgressPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
+func ValidateCustom_InspectQuarantinedActorEgressPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
 	return validateSingletonName(p, *name)
 }
 

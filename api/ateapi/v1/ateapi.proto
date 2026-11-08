@@ -98,7 +98,7 @@ service Control {
 
   // Read the stored policy during an actor quarantine. Only quarantine
   // administrators may use this RPC; gateways still use GetActorEgressPolicy.
-  rpc GetQuarantinedActorEgressPolicy(GetQuarantinedActorEgressPolicyRequest) returns (EgressPolicy) {
+  rpc InspectQuarantinedActorEgressPolicy(InspectQuarantinedActorEgressPolicyRequest) returns (InspectQuarantinedActorEgressPolicyResponse) {
     option (method).resource = "EgressPolicy";
   }
 
@@ -2408,8 +2408,8 @@ message GetActorEgressPolicyRequest {
   string name = 2;
 }
 
-// GetQuarantinedActorEgressPolicyRequest identifies the stored policy.
-message GetQuarantinedActorEgressPolicyRequest {
+// InspectQuarantinedActorEgressPolicyRequest identifies the stored policy.
+message InspectQuarantinedActorEgressPolicyRequest {
   // Parent actor.
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
@@ -2420,6 +2420,12 @@ message GetQuarantinedActorEgressPolicyRequest {
   // +k8s:format=k8s-short-name
   // +k8s:customValidation
   string name = 2;
+}
+
+// InspectQuarantinedActorEgressPolicyResponse contains the stored policy.
+message InspectQuarantinedActorEgressPolicyResponse {
+  // Stored policy, including its UID and version for a later update.
+  EgressPolicy egress_policy = 1;
 }
 
 // CreateActorEgressPolicyRequest creates an egress policy for an Actor.

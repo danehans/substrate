@@ -446,7 +446,7 @@ tests:
           can_get: true
           can_update: false
           can_delete: false
-      - user: user:judy # Global quarantine admin
+      - user: user:judy # Global quarantine admin; may inspect the stored policy
         object: actor:runner-1
         assertions:
           can_quarantine: true

@@ -200,9 +200,9 @@ func TestActorQuarantine_SuspendsRunningActor(t *testing.T) {
 func TestActorQuarantine_RefusesEveryPath(t *testing.T) {
 	f := newReceiptFixture(t, "ns-quarantine-refuse")
 	createdPolicy := createEgressPolicy(t, f.tc, f.ref)
-	policyReq := &ateapi.GetQuarantinedActorEgressPolicyRequest{Actor: f.ref, Name: resources.SingletonName}
-	if _, err := f.tc.client.GetQuarantinedActorEgressPolicy(asPrincipal(f.ctx, securityAdmin), policyReq); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("GetQuarantinedActorEgressPolicy before quarantine: %v, want FailedPrecondition", err)
+	policyReq := &ateapi.InspectQuarantinedActorEgressPolicyRequest{Actor: f.ref, Name: resources.SingletonName}
+	if _, err := f.tc.client.InspectQuarantinedActorEgressPolicy(asPrincipal(f.ctx, securityAdmin), policyReq); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("InspectQuarantinedActorEgressPolicy before quarantine: %v, want FailedPrecondition", err)
 	}
 	f.resume()
 	// A node-local snapshot makes the suspended Actor revertable.
@@ -239,10 +239,11 @@ func TestActorQuarantine_RefusesEveryPath(t *testing.T) {
 
 	// An ordinary policy update is stored, and the gateways are still
 	// refused.
-	stored, err := f.tc.client.GetQuarantinedActorEgressPolicy(asPrincipal(f.ctx, securityAdmin), policyReq)
+	inspection, err := f.tc.client.InspectQuarantinedActorEgressPolicy(asPrincipal(f.ctx, securityAdmin), policyReq)
 	if err != nil {
-		t.Fatalf("GetQuarantinedActorEgressPolicy: %v", err)
+		t.Fatalf("InspectQuarantinedActorEgressPolicy: %v", err)
 	}
+	stored := inspection.GetEgressPolicy()
 	if diff := cmp.Diff(createdPolicy, stored, protocmp.Transform()); diff != "" {
 		t.Fatalf("stored egress policy mismatch (-created +read):\n%s", diff)
 	}

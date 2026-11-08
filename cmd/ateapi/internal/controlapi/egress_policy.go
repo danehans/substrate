@@ -80,8 +80,8 @@ func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.Ac
 	return policy, nil
 }
 
-func (s *RPCService) GetQuarantinedActorEgressPolicy(ctx context.Context, req *ateapi.GetQuarantinedActorEgressPolicyRequest) (*ateapi.EgressPolicy, error) {
-	if errs := apivalidation.ValidateGetQuarantinedActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
+func (s *RPCService) InspectQuarantinedActorEgressPolicy(ctx context.Context, req *ateapi.InspectQuarantinedActorEgressPolicyRequest) (*ateapi.InspectQuarantinedActorEgressPolicyResponse, error) {
+	if errs := apivalidation.ValidateInspectQuarantinedActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
@@ -92,7 +92,11 @@ func (s *RPCService) GetQuarantinedActorEgressPolicy(ctx context.Context, req *a
 	if actor.GetStatus().GetQuarantine() == nil {
 		return nil, apierror.FailedPrecondition("Actor %s is not quarantined", actorRef)
 	}
-	return s.impl.GetEgressPolicy(ctx, actorRef)
+	policy, err := s.impl.GetEgressPolicy(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	return &ateapi.InspectQuarantinedActorEgressPolicyResponse{EgressPolicy: policy}, nil
 }
 
 func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapi.UpdateActorEgressPolicyRequest) (*ateapi.EgressPolicy, error) {

@@ -211,7 +211,7 @@ viewer, and a global role holds the same role in every atespace. So
 | `ReleaseQuarantine` | `can_release_quarantine`, the actor | `quarantine_admin` of its atespace |
 | `ResumeActor` | `can_resume`, the actor | Editor of its atespace; `atenet-router` |
 | `GetActorEgressPolicy` | `can_get_egress_policy`, the actor | Viewer of its atespace; `atenet-egress`; `atelet` |
-| `GetQuarantinedActorEgressPolicy` | `can_get_quarantined_egress_policy`, the actor | `quarantine_admin` of its atespace |
+| `InspectQuarantinedActorEgressPolicy` | `can_get_quarantined_egress_policy`, the actor | `quarantine_admin` of its atespace |
 | `CreateActorEgressPolicy`, `UpdateActorEgressPolicy`, `DeleteActorEgressPolicy` | `can_create_egress_policy` / `can_update_egress_policy` / `can_delete_egress_policy`, the actor | Editor of its atespace |
 | `MintActorJwt` | `can_mint_actor_jwt`, the actor | `atenet-egress` only |
 
