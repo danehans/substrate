@@ -68,8 +68,12 @@ names its upstream proposal and the condition that retires it.
    [agent-substrate/substrate#3066](https://github.com/agent-substrate/substrate/issues/3066). See
    [actor quarantine](../../../docs/guides/actor-quarantine.md).
    A separate `InspectQuarantinedActorEgressPolicy` read lets
-   `quarantine_admin` inspect the stored policy and its update metadata.
-   `GetActorEgressPolicy` remains refused for every caller while quarantined.
+   `quarantine_admin` inspect the stored policy and its `uid` and `version`
+   through `can_get_quarantined_egress_policy`. An operator with `editor` can
+   update it with that metadata. `GetActorEgressPolicy` remains refused for
+   every caller while quarantined; an update does not release the quarantine.
+   This operator read came from
+   [danehans/substrate#10](https://github.com/danehans/substrate/pull/10).
    - Upstream proposal:
      [agent-substrate/substrate#3463](https://github.com/agent-substrate/substrate/issues/3463).
    - Replacement condition: a `kagent-dev/substrate` release quarantines
@@ -95,7 +99,11 @@ names its upstream proposal and the condition that retires it.
    `agentgateway-image` workflow and pinned by digest. The chart's
    `atenet-egress` gateway and `atenet-router` ingress router both use this
    value, as they do in the base. The kustomize manifests under
-   `manifests/ate-install` keep the base gateway.
+   `manifests/ate-install` keep the base gateway. The chart gateway returns
+   `actor-quarantined`, `actor-uid-mismatch`, or `activation-mismatch` in the
+   body of a refused CONNECT. Its
+   `agentgateway::substrate::connect_refusal` log target records the reason
+   code, certified actor identity and CONNECT authority at `warn`.
    - Upstream proposal:
      [agentgateway/agentgateway#4289](https://github.com/agentgateway/agentgateway/issues/4289)
      (expose the applied Substrate egress policy's UID and version to CEL and
