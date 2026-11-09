@@ -1,6 +1,7 @@
 # Envoy Substrate Egress Policy Implementation
 
-This Envoy dynamic module implements two extensions that work together to minimize
+This Envoy dynamic module stores and enforces egress policy and checks ongoing
+exact-run tunnel authorization. Its policy extensions minimize
 memory usage by Substrate egress policies.
 
 To minimize memory usage egress policies are hashed using [Rapidhash](https://docs.rs/rapidhash/latest/rapidhash/)
@@ -59,3 +60,47 @@ metrics:
 | `ate_egress.policy_store_size` | Gauge | Current number of unique `EgressPolicy` entries stored in the worker thread's local store (summed across workers by Envoy). |
 | `ate_egress.parse_errors` | Counter | Number of times `EgressPolicy::new_from_metadata` returned `None` due to missing or malformed policy metadata. |
 | `ate_egress.policy_shared` | Counter | Number of times a `CONNECT` request reused an `EgressPolicy` already present in the worker thread's local store. |
+
+## Exact-run tunnel revocation
+
+The downstream fork installs `envoy_substrate_revocation` before the HTTP
+connection manager and passthrough TCP proxy in every internal egress chain.
+The CONNECT ext_proc handler derives its binding from the verified workload
+certificate and issues an opaque per-CONNECT capability. Envoy carries it in
+shared filter state; it never comes from actor request headers. A separate
+trusted `legacy` marker preserves CONNECT behavior for certificates without an
+activation. Missing required state closes the connection.
+
+The network filter checks its capability against the loopback-only atenet
+control listener on port 18081. The sidecar polls authenticated `GetActor`
+once per active certificate-bound execution per replica, with jitter, a
+maximum five-second interval and a two-second RPC deadline. A UID or activation
+mismatch takes precedence over quarantine. Quarantine, deletion, lookup failure
+or stale scheduling invalidates existing handles. An ordinary hold does not.
+Release permits a fresh admitted CONNECT; it never reopens old handles.
+
+A monotonic seven-second freshness watchdog closes MITM HTTP/2 streams and
+passthrough copies. Local capability checks run every 500 ms; the scheduler
+runs every 100 ms. The outer CONNECT HCM disables delayed close. The eight-second
+end-to-end budget remains an unqualified target under runtime scheduling and
+control-plane load. In-flight upstream work may outlive socket closure.
+Control-plane outages can close permitted connections. Pending or abandoned
+capabilities expire after ten seconds without a local heartbeat.
+
+The module logs `connect_revocation` with its reason and frozen UID, activation
+and authority, without logging capabilities. `ate_egress.revocation.closed`
+counts local close requests. The sidecar exports `atenet.router.revocation.*`
+actor/tunnel gauges and lookup/failure/overdue counters without identity labels.
+These mechanisms do not qualify a Picket network effect or change its pins.
+
+Run the Envoy integration harness explicitly after building the local image:
+
+```sh
+docker build -t q6-atenet-envoy cmd/dataplane/envoy
+Q6_ENVOY_IMAGE=q6-atenet-envoy:latest go test -tags envoyintegration ./cmd/atenet/internal/router/egress -run TestEnvoyRevokesEstablishedConnections -count=3
+```
+
+The fixture uses real Envoy connections and a synthetic authenticated actor
+view. It covers TLS passthrough and TLS-terminated pooled HTTP/2 without worker
+teardown; it does not qualify a deployed ateapi, independent gateway replicas
+or a Picket processor response.

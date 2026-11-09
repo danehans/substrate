@@ -114,6 +114,8 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: egress_connect
+              # Actor revocation must not wait for HCM delayed close.
+              delayed_close_timeout: 0s
               common_http_protocol_options:
                 # Set low idle timeout for connections, as atunnel does close tunnels from deleted actors.
                 idle_timeout: 30s
@@ -259,6 +261,31 @@ data:
                   # forward proxy reads, so the passthrough chain dials the
                   # resolved SNI on that port. The address the actor dialed is
                   # never carried.
+                  # Only ext_proc can mint this per-CONNECT control capability.
+                  - object_key: dev.ate.revocation.mode
+                    factory_key: envoy.hashable_string
+                    skip_if_empty: true
+                    shared_with_upstream: ONCE
+                    format_string:
+                      text_format_source:
+                        inline_string: "%DYNAMIC_METADATA(dev.ate.egress:revocation_mode)%"
+                      omit_empty_values: true
+                  - object_key: dev.ate.revocation.identity
+                    factory_key: envoy.hashable_string
+                    skip_if_empty: true
+                    shared_with_upstream: ONCE
+                    format_string:
+                      text_format_source:
+                        inline_string: "%DYNAMIC_METADATA(dev.ate.egress:revocation_identity)%"
+                      omit_empty_values: true
+                  - object_key: dev.ate.revocation.token
+                    factory_key: envoy.hashable_string
+                    skip_if_empty: true
+                    shared_with_upstream: ONCE
+                    format_string:
+                      text_format_source:
+                        inline_string: "%DYNAMIC_METADATA(dev.ate.egress:revocation_token)%"
+                      omit_empty_values: true
                   - object_key: envoy.upstream.dynamic_port
                     skip_if_empty: true
                     shared_with_upstream: ONCE
@@ -396,6 +423,12 @@ data:
         filter_chains:
         - name: egress_tls_mitm
           filters:
+          - name: envoy.filters.network.dynamic_modules
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.dynamic_modules.v3.DynamicModuleNetworkFilter
+              dynamic_module_config:
+                name: envoy_substrate_egress_policy
+              filter_name: envoy_substrate_revocation
           - name: envoy.filters.network.http_connection_manager
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
@@ -625,6 +658,12 @@ data:
         # Non-HTTP streams fail in the codec.
         - name: egress_cleartext
           filters:
+          - name: envoy.filters.network.dynamic_modules
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.dynamic_modules.v3.DynamicModuleNetworkFilter
+              dynamic_module_config:
+                name: envoy_substrate_egress_policy
+              filter_name: envoy_substrate_revocation
           - name: envoy.filters.network.http_connection_manager
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
@@ -791,6 +830,12 @@ data:
         # (docs/network-egress.md).
         - name: egress_passthrough
           filters:
+          - name: envoy.filters.network.dynamic_modules
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.dynamic_modules.v3.DynamicModuleNetworkFilter
+              dynamic_module_config:
+                name: envoy_substrate_egress_policy
+              filter_name: envoy_substrate_revocation
           - name: envoy.filters.network.sni_dynamic_forward_proxy
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.sni_dynamic_forward_proxy.v3.FilterConfig
@@ -966,6 +1011,19 @@ data:
       # ext_proc gRPC server = the atenet router, co-located in this pod as a
       # sidecar and called over localhost (same topology the ingress gateway uses
       # for its dataplane + ext_proc).
+      - name: revocation_control
+        type: STATIC
+        connect_timeout: 1s
+        load_assignment:
+          cluster_name: revocation_control
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: 127.0.0.1
+                    port_value: 18081
+
       - name: ext_proc_server
         type: STATIC
         lb_policy: ROUND_ROBIN

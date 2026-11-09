@@ -248,6 +248,9 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		}
 
 		egressHandler := egress.New(s.apiClient, loadActorIdentityRoots, s.cfg.EgressPolicyCacheTTL, providers)
+		if s.cfg.atenetRouter() == atenetRouterEnvoy {
+			g.Go(func() error { return egressHandler.RunRevocations(ctx) })
+		}
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 

@@ -640,6 +640,9 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesHashToTheInnerListener(t *test
 	wantKeys := []string{
 		extproc.ActorIdentityFilterStateKey,
 		extproc.ConnectAuthorityFilterStateKey,
+		"dev.ate.revocation.mode",
+		"dev.ate.revocation.identity",
+		"dev.ate.revocation.token",
 		extproc.UpstreamDynamicPortFilterStateKey,
 		extproc.EgressPolicyHashFilterStateKey,
 	}
@@ -726,15 +729,15 @@ func TestEgressManifestsPassthroughChainDialsTheResolvedSNI(t *testing.T) {
 		t.Fatal("no egress_passthrough chain on mitm_listener")
 	}
 	filters := list(chain, "filters")
-	if len(filters) != 2 || str(filters[0], "name") != "envoy.filters.network.sni_dynamic_forward_proxy" || str(filters[1], "name") != "envoy.filters.network.tcp_proxy" {
+	if len(filters) != 3 || str(filters[0], "name") != "envoy.filters.network.dynamic_modules" || str(filters[1], "name") != "envoy.filters.network.sni_dynamic_forward_proxy" || str(filters[2], "name") != "envoy.filters.network.tcp_proxy" {
 		names := make([]string, len(filters))
 		for i, f := range filters {
 			names[i] = str(f, "name")
 		}
-		t.Fatalf("egress_passthrough filters = %v, want sni_dynamic_forward_proxy then tcp_proxy", names)
+		t.Fatalf("egress_passthrough filters = %v, want revocation, sni_dynamic_forward_proxy then tcp_proxy", names)
 	}
-	sni := child(filters[0], "typed_config")
-	proxy := child(filters[1], "typed_config")
+	sni := child(filters[1], "typed_config")
+	proxy := child(filters[2], "typed_config")
 	if got := str(proxy, "cluster"); got != passthroughForwardProxyCluster {
 		t.Errorf("egress_passthrough tcp_proxy dials %q, want %q", got, passthroughForwardProxyCluster)
 	}
