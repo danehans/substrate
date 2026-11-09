@@ -175,6 +175,28 @@ jobs:
       with:
         ref: refs/tags/${{ inputs.tag || github.ref_name }}
         persist-credentials: false
+    - name: Setup Go
+      if: github.repository == 'danehans/substrate'
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: 'go.mod'
+        cache: false
+    - name: Install crane
+      if: github.repository == 'danehans/substrate'
+      run: hack/release/danehans/install-crane.sh
+    - name: Log in to ghcr.io
+      if: github.repository == 'danehans/substrate'
+      env:
+        TOKEN: ${{ github.token }}
+      run: .github/scripts/release/ghcr-login.sh
+    - name: Refuse to publish for a published release
+      if: github.repository == 'danehans/substrate'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: .github/scripts/release/refuse-published-release.sh
+    - name: Tag the chart's gateway digest
+      if: github.repository == 'danehans/substrate'
+      run: hack/release/danehans/tag-gateway-release.sh
     - name: Install Helm
       uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
       with:

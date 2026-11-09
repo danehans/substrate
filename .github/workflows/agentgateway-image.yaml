@@ -39,6 +39,9 @@ on:
 
 permissions:
   contents: read
+concurrency:
+  group: agentgateway-image-${{ github.repository }}
+  cancel-in-progress: false
 
 env:
   REGISTRY_IMAGE: ghcr.io/${{ github.repository }}/agentgateway
@@ -47,17 +50,25 @@ jobs:
   source:
     if: github.event_name == 'workflow_dispatch' || github.repository == 'danehans/substrate'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     outputs:
       repository: ${{ steps.selected.outputs.repository }}
       sha: ${{ steps.source.outputs.sha }}
       short_sha: ${{ steps.source.outputs.short_sha }}
       tag: ${{ steps.source.outputs.tag }}
+      exists: ${{ steps.existing.outputs.exists }}
     steps:
-      - name: Checkout the selected source file
-        if: github.event_name == 'push'
+      - name: Checkout fork release files
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          sparse-checkout: hack/release/danehans/agentgateway.env
+          sparse-checkout: |
+            go.mod
+            hack/release/danehans/agentgateway.env
+            hack/release/danehans/check-gateway-image.sh
+            hack/release/danehans/install-crane.sh
+            hack/release/danehans/registry-tag.sh
           sparse-checkout-cone-mode: false
           persist-credentials: false
           path: selected
@@ -95,13 +106,14 @@ jobs:
           repository: ${{ steps.selected.outputs.repository }}
           ref: ${{ steps.selected.outputs.ref }}
           persist-credentials: false
+          path: gateway
 
       - name: Resolve source revision and image tag
         id: source
         env:
           IMAGE_TAG: ${{ inputs.tag }}
         run: |
-          sha=$(git rev-parse HEAD)
+          sha=$(git -C gateway rev-parse HEAD)
           short_sha=${sha:0:12}
           tag=${IMAGE_TAG:-$short_sha}
           if [[ ! "$tag" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]]; then
@@ -114,8 +126,31 @@ jobs:
             echo "tag=$tag"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: selected/go.mod
+          cache: false
+
+      - name: Install crane
+        run: selected/hack/release/danehans/install-crane.sh
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check existing image tag
+        id: existing
+        env:
+          IMAGE_TAG: ${{ steps.source.outputs.tag }}
+        run: selected/hack/release/danehans/check-gateway-image.sh
+
   build:
     needs: source
+    if: needs.source.outputs.exists != 'true'
     permissions:
       contents: read
       packages: write
@@ -183,6 +218,7 @@ jobs:
     needs:
       - source
       - build
+    if: needs.source.outputs.exists != 'true'
     runs-on: ubuntu-24.04
     permissions:
       packages: write
