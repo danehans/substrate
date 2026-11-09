@@ -63,6 +63,15 @@ jobs:
           ~/go/pkg/mod
         key: unit-go-${{ runner.os }}-${{ github.sha }}
         restore-keys: unit-go-${{ runner.os }}-
+    # The release-asset URL used by setup-envtest intermittently returns 504.
+    # Sideload the same archive through the GitHub API after checking its hash.
+    - name: Preload envtest
+      run: |
+        curl -fLsS --retry 3 -H 'Accept: application/octet-stream' \
+          -o /tmp/envtest.tar.gz \
+          https://api.github.com/repos/kubernetes-sigs/controller-tools/releases/assets/458700685
+        echo 'ea743186c8a799f5cf8faf16969f86189d003cb7d130e0ac4b58789f1e5748dcf30ebe91c837a10d5ac415383da3e10b9e64d65785c938c23e739781cfb76f08  /tmp/envtest.tar.gz' | sha512sum -c -
+        hack/run-tool.sh setup-envtest sideload --os linux --arch amd64 1.36.2 < /tmp/envtest.tar.gz
     # we only test on amd64, make sure everything still builds for arm64
     - name: build for arm64
       run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
