@@ -62,10 +62,11 @@ stop to this quarantine without a receipt.
   actor JWT the egress gateway injects, are refused. The certificate the
   worker already holds stays valid; see below.
 - **New egress through the chart's agentgateway.** `GetActorEgressPolicy`
-  fails with `FAILED_PRECONDITION` for every caller. agentgateway fetches the
-  policy for every HTTP request and TLS handshake in a tunnel, with no cache,
-  and denies on that error. This holds for tunnels opened before the
-  quarantine, and for TLS passthrough, whose handshake is checked.
+  fails with `FAILED_PRECONDITION` for every caller. agentgateway also reads
+  the actor on every new CONNECT and refuses a quarantined actor before
+  dialing upstream. For tunnels opened before quarantine, it fetches the
+  policy for every HTTP request and TLS handshake, with no cache, and denies
+  on the error. This includes TLS passthrough handshakes.
 - **New egress tunnels through atenet**, the kustomize gateway. It reads the
   actor for every new tunnel and refuses a quarantined one. It also compares
   the verified worker certificate's actor UID and, when present, activation
@@ -152,13 +153,30 @@ found, and the steps in effect. See `docs/metrics/registry/events.yaml`.
 A routed request to a quarantined actor writes one refused-resume event, so
 the stream grows with ingress traffic to it.
 
+On the chart's agentgateway, a new CONNECT denied because of quarantine
+returns HTTP 403 with the fixed body `actor-quarantined`. A stale certificate
+actor UID returns `actor-uid-mismatch`; a stale activation returns
+`activation-mismatch`. atunnel logs the rejected CONNECT body with the
+destination authority, while the actor sees a closed connection. These codes
+apply to CONNECT admission; other errors retain generic responses.
+
+For a dedicated gateway refusal event, set the `atenet-egress` Deployment's
+`RUST_LOG` to `off,agentgateway::substrate::connect_refusal=warn`, for example:
+
+```sh
+kubectl -n ate-system set env deployment/<release>-atenet-egress \
+  RUST_LOG='off,agentgateway::substrate::connect_refusal=warn'
+```
+
+The event includes `reason_code`, the certified actor identity and
+`connect_authority`.
+The chart currently sets `RUST_LOG` to `debug`; keep this override in your
+deployment configuration so a Helm upgrade does not reset it.
+
 ## Out of scope
 
 - Closing open connections without stopping the workload. That needs an
   agentgateway change to end tunnels when an actor is quarantined.
-- agentgateway reading `status.quarantine` itself. It denies through the
-  egress policy fetch instead, and still admits a tunnel from a running
-  quarantined actor before denying the requests in it.
 - Cancelling upstream work that was already forwarded.
 - Quarantining every actor of a template or an atespace.
 - Exporting snapshots, or restoring one into an isolated environment.
