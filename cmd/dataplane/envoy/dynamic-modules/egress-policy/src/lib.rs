@@ -18,18 +18,19 @@
 pub mod egress_policy;
 pub mod egress_policy_store;
 pub mod listener_filter;
-pub mod revocation_filter;
 pub mod policy_store_filter;
+pub mod revocation_filter;
+pub mod revocation_http_filter;
 
-use envoy_proxy_dynamic_modules_rust_sdk::declare_all_init_functions;
 pub use egress_policy::*;
 pub use egress_policy_store::*;
+use envoy_proxy_dynamic_modules_rust_sdk::declare_all_init_functions;
 pub use listener_filter::*;
 pub use policy_store_filter::*;
 
 declare_all_init_functions!(
   init,
-  http: policy_store_filter::new_http_filter_config_fn,
+  http: new_http_config_fn,
   listener: listener_filter::new_listener_filter_config_fn,
   network: revocation_filter::new_network_filter_config_fn,
 );
@@ -46,5 +47,20 @@ mod tests {
   #[test]
   fn test_init() {
     assert!(init());
+  }
+}
+
+fn new_http_config_fn<
+  EC: envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilterConfig,
+  EHF: envoy_proxy_dynamic_modules_rust_sdk::EnvoyHttpFilter,
+>(
+  config: &mut EC,
+  name: &str,
+  bytes: &[u8],
+) -> Option<Box<dyn envoy_proxy_dynamic_modules_rust_sdk::HttpFilterConfig<EHF>>> {
+  if name == "envoy_substrate_revocation_http" {
+    revocation_http_filter::new_http_filter_config_fn(config, name, bytes)
+  } else {
+    policy_store_filter::new_http_filter_config_fn(config, name, bytes)
   }
 }

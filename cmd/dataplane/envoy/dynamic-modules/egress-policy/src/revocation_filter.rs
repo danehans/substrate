@@ -108,6 +108,9 @@ impl Filter {
     );
   }
   fn check<ENF: EnvoyNetworkFilter>(&mut self, envoy: &mut ENF) {
+    if self.closed {
+      return;
+    }
     let now = Instant::now();
     if now >= self.deadline {
       self.close(envoy, "actor-check-overdue");
@@ -132,6 +135,7 @@ impl Filter {
         (":path", b"/permit"),
         ("host", b"revocation-control"),
         ("authorization", authorization.as_bytes()),
+        ("x-permit-phase", b"network"),
       ],
       None,
       timeout,
@@ -218,6 +222,9 @@ impl<ENF: EnvoyNetworkFilter> NetworkFilter<ENF> for Filter {
     headers: Vec<(EnvoyBuffer, EnvoyBuffer)>,
     body: Vec<EnvoyBuffer>,
   ) {
+    if self.closed {
+      return;
+    }
     let Some(sent) = self.sent.take() else {
       self.close(envoy, "actor-check-failed");
       return;
@@ -268,6 +275,8 @@ impl<ENF: EnvoyNetworkFilter> NetworkFilter<ENF> for Filter {
     if event == abi::envoy_dynamic_module_type_network_connection_event::LocalClose
       || event == abi::envoy_dynamic_module_type_network_connection_event::RemoteClose
     {
+      self.closed = true;
+      self.sent = None;
       self.schedulers.lock().unwrap().remove(&self.id);
       if let Some(token) = self.token.take() {
         let authorization = format!("Bearer {}", token);
@@ -278,6 +287,7 @@ impl<ENF: EnvoyNetworkFilter> NetworkFilter<ENF> for Filter {
             (":path", b"/permit"),
             ("host", b"revocation-control"),
             ("authorization", authorization.as_bytes()),
+            ("x-permit-phase", b"network"),
           ],
           None,
           1000,
