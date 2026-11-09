@@ -416,6 +416,7 @@ tests:
         assertions:
           can_quarantine: true
           can_release_quarantine: false
+          can_get_quarantined_egress_policy: false
       - user: user:alice # Atespace owner
         object: actor:runner-1
         assertions:
@@ -445,11 +446,12 @@ tests:
           can_get: true
           can_update: false
           can_delete: false
-      - user: user:judy # Global quarantine admin
+      - user: user:judy # Global quarantine admin; may inspect the stored policy
         object: actor:runner-1
         assertions:
           can_quarantine: true
           can_release_quarantine: true
+          can_get_quarantined_egress_policy: true
           can_get: true
           can_resume: false
           can_delete: false
@@ -458,6 +460,7 @@ tests:
         assertions:
           can_quarantine: true
           can_release_quarantine: true
+          can_get_quarantined_egress_policy: true
           can_get: true
           can_update: false
           can_resume: false
@@ -471,6 +474,7 @@ tests:
         assertions:
           can_quarantine: false
           can_release_quarantine: false
+          can_get_quarantined_egress_policy: false
       - user: user:sa-runner-1 # Workload identity with suspend and revert
         object: actor:runner-1
         assertions:
@@ -486,6 +490,7 @@ tests:
         assertions:
           can_quarantine: false
           can_release_quarantine: false
+          can_get_quarantined_egress_policy: false
       - user: user:kim
         object: atespace:space-1
         assertions:
@@ -582,6 +587,7 @@ tests:
       - user: user:sys-atelet # atelet reads egress policies for the worker that enforces them
         object: actor:runner-1
         assertions:
+          can_get_quarantined_egress_policy: false
           can_get_egress_policy: true
           can_get: false
           can_update: false

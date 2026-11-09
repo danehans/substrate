@@ -830,7 +830,7 @@ A quarantine is a hold with the holder `quarantine` that also cuts the actor's n
 
 While an actor is quarantined:
 
-*   `ResumeActor` and `DeleteActor` fail as for a hold, with metadata `cause: ACTOR_QUARANTINED`. `RevertActor`, `CreateTag` from the actor, `MintActorJwt` and `GetActorEgressPolicy` fail the same way, and `MintWorkerActorCertificate` is refused with `FAILED_PRECONDITION`. Updating the egress policy works and does not lift the quarantine, but needs the policy's `uid` and `version` from a read made before the quarantine.
+*   `ResumeActor` and `DeleteActor` fail as for a hold, with metadata `cause: ACTOR_QUARANTINED`. `RevertActor`, `CreateTag` from the actor, `MintActorJwt` and `GetActorEgressPolicy` fail the same way, and `MintWorkerActorCertificate` is refused with `FAILED_PRECONDITION`. A `quarantine_admin` can use `InspectQuarantinedActorEgressPolicy` to read the stored policy with its `uid` and `version`. An editor can update the policy with that metadata; the update does not lift the quarantine.
 *   A suspend keeps the snapshots it replaces in object storage.
 
 Each quarantine, each suspend or terminate it finishes, each release, and each resume it refuses before the resume writes anything, writes an `ate.actor.quarantine_changed` event. See `docs/metrics/registry/events.yaml`.
