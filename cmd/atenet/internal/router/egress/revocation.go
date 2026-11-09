@@ -54,6 +54,7 @@ type tunnelPermit struct {
 	accessed time.Time
 	active   bool
 	check    *actorCheck
+	phases   map[string]bool
 }
 type actorCheck struct {
 	checked, due time.Time
@@ -108,6 +109,14 @@ func (r *revocations) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "denied", http.StatusForbidden)
 		return
 	}
+	phase := req.Header.Get("X-Permit-Phase")
+	if phase == "" {
+		phase = "network"
+	}
+	if phase != "network" && phase != "connect" {
+		http.Error(w, "denied", http.StatusForbidden)
+		return
+	}
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -117,7 +126,10 @@ func (r *revocations) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if req.Method == http.MethodDelete {
-		delete(r.tunnels, token)
+		delete(t.phases, phase)
+		if len(t.phases) == 0 {
+			delete(r.tunnels, token)
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -126,6 +138,10 @@ func (r *revocations) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	a := t.check
+	if t.phases == nil {
+		t.phases = make(map[string]bool)
+	}
+	t.phases[phase] = true
 	t.active = true
 	t.accessed = now
 	if a.reason != "" || !now.Before(a.checked.Add(revocationFreshness)) {

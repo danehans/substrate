@@ -368,3 +368,31 @@ func TestFreshAdmissionDoesNotReuseExpiredPendingGroup(t *testing.T) {
 		}
 	})
 }
+
+func TestRevocationPhaseCleanupPreservesOtherHandle(t *testing.T) {
+	r := newRevocations(nil)
+	token, err := r.admit(revocationCert(t), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(method, phase string) int {
+		req := httptest.NewRequest(method, "/permit", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-Permit-Phase", phase)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	if request(http.MethodPost, "connect") != 200 || request(http.MethodPost, "network") != 200 {
+		t.Fatal("phase registration failed")
+	}
+	if request(http.MethodDelete, "network") != 204 || request(http.MethodPost, "connect") != 200 {
+		t.Fatal("inner cleanup invalidated outer CONNECT")
+	}
+	if len(r.tunnels) != 1 || len(r.actors) != 1 {
+		t.Fatal("phase handles duplicated actor/token registry")
+	}
+	if request(http.MethodDelete, "connect") != 204 || request(http.MethodPost, "network") != 403 {
+		t.Fatal("retired token reopened")
+	}
+}

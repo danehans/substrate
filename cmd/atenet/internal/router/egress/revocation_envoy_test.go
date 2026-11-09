@@ -42,7 +42,7 @@ import (
 // Run with -tags envoyintegration after building Q6_ENVOY_IMAGE from this tree.
 // An explicitly selected integration lane fails if Docker or its image is absent.
 func TestEnvoyRevokesEstablishedConnections(t *testing.T) {
-	for _, mode := range []string{"passthrough", "passthrough-tls", "mitm-http2", "passthrough-gateway-loss"} {
+	for _, mode := range []string{"passthrough", "passthrough-tls", "mitm-http2", "passthrough-gateway-loss", "idle-connect", "partial-clienthello"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -106,7 +106,7 @@ func TestEnvoyRevokesEstablishedConnections(t *testing.T) {
           "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
           stat_prefix: inner
           cluster: echo`
-			if mode == "mitm-http2" {
+			if mode == "mitm-http2" || mode == "idle-connect" || mode == "partial-clienthello" {
 				// Use the standard local test certificate only inside this fixture.
 				certServer := httptest.NewTLSServer(http.NotFoundHandler())
 				cert := certServer.TLS.Certificates[0]
@@ -223,7 +223,7 @@ func TestEnvoyRevokesEstablishedConnections(t *testing.T) {
 				if _, err = io.ReadFull(reader, got); err != nil || string(got) != "open" {
 					t.Fatalf("existing bytes: %q %v", got, err)
 				}
-			} else {
+			} else if mode == "mitm-http2" {
 				tlsConnection := tls.Client(connection, &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}}) // Fixture certificate only.
 				if err = tlsConnection.HandshakeContext(ctx); err != nil {
 					t.Fatal(err)
@@ -246,6 +246,9 @@ func TestEnvoyRevokesEstablishedConnections(t *testing.T) {
 					bodies = append(bodies, response.Body)
 				}
 			}
+			if mode == "partial-clienthello" {
+				connection.Write([]byte{0x16, 0x03})
+			}
 			quarantined := runningActor()
 			quarantined.Status.ActivationId = "activation-1"
 			quarantined.Status.Quarantine = &ateapi.ActorQuarantine{RequestId: "q1"}
@@ -258,7 +261,12 @@ func TestEnvoyRevokesEstablishedConnections(t *testing.T) {
 				current.Store(quarantined)
 			}
 			// The actor remains RUNNING and this fixture never asks the worker to stop.
-			if strings.HasPrefix(mode, "passthrough") {
+			if mode == "idle-connect" || mode == "partial-clienthello" {
+				_, err = io.Copy(io.Discard, reader)
+				if err != nil {
+					t.Fatalf("pending handshake close: %v", err)
+				}
+			} else if strings.HasPrefix(mode, "passthrough") {
 				_, err = reader.ReadByte()
 				if err == nil {
 					t.Fatal("passthrough remained open")

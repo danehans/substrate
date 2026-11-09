@@ -63,7 +63,10 @@ metrics:
 
 ## Exact-run tunnel revocation
 
-The downstream fork installs `envoy_substrate_revocation` before the HTTP
+The downstream fork guards the outer CONNECT stream with
+`envoy_substrate_revocation_http`, after its trusted filter state is set. This
+guard remains active while TLS inspection or an incomplete ClientHello waits.
+It also installs `envoy_substrate_revocation` before the HTTP
 connection manager and passthrough TCP proxy in every internal egress chain.
 The CONNECT ext_proc handler derives its binding from the verified workload
 certificate and issues an opaque per-CONNECT capability. Envoy carries it in
@@ -89,7 +92,9 @@ capabilities expire after ten seconds without a local heartbeat.
 
 The module logs `connect_revocation` with its reason and frozen UID, activation
 and authority, without logging capabilities. `ate_egress.revocation.closed`
-counts local close requests. The sidecar exports `atenet.router.revocation.*`
+counts local network close requests; `ate_egress.revocation.stream_closed`
+counts outer CONNECT resets. Both phases share one capability and actor poll
+group. Retiring one phase does not retire the other phase. The sidecar exports `atenet.router.revocation.*`
 actor/tunnel gauges and lookup/failure/overdue counters without identity labels.
 These mechanisms do not qualify a Picket network effect or change its pins.
 

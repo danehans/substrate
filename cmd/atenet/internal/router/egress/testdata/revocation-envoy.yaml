@@ -61,6 +61,11 @@ static_resources:
                 shared_with_upstream: ONCE
                 format_string:
                   text_format_source: {inline_string: TOKEN_PLACEHOLDER}
+          - name: envoy.filters.http.dynamic_modules
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter
+              dynamic_module_config: {name: envoy_substrate_egress_policy}
+              filter_name: envoy_substrate_revocation_http
           - name: envoy.filters.http.router
             typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router}
   - name: inner
