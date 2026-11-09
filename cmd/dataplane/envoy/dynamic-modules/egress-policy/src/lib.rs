@@ -18,6 +18,7 @@
 pub mod egress_policy;
 pub mod egress_policy_store;
 pub mod listener_filter;
+pub mod revocation_filter;
 pub mod policy_store_filter;
 
 use envoy_proxy_dynamic_modules_rust_sdk::declare_all_init_functions;
@@ -30,6 +31,7 @@ declare_all_init_functions!(
   init,
   http: policy_store_filter::new_http_filter_config_fn,
   listener: listener_filter::new_listener_filter_config_fn,
+  network: revocation_filter::new_network_filter_config_fn,
 );
 
 /// Called when the dynamic module is loaded into Envoy.
