@@ -84,7 +84,8 @@ caller.
 Suspend or fallback termination tears down the workload. atunnel closes every egress tunnel,
 including TLS passthrough ones, and cancels in-flight ingress requests. The
 actor is then `SUSPENDED`, and both gateways refuse new tunnels from it.
-These are the steps that close connections that are already open.
+The gateways also close open tunnels independently of worker teardown, as
+described below.
 
 ## What can last up to a TTL
 
@@ -96,7 +97,8 @@ Until the workload stops:
   before the quarantine use the cached policy for that long.
 - atunnel caches the policy it resolves DNS with for 5 seconds, and keeps the
   cached one if a refresh fails.
-- Bytes on open tunnels, including TLS passthrough, keep flowing.
+- Open tunnels remain subject to the continuing checks below, including TLS
+  passthrough. Cached policy never extends their authorization deadline.
 - The worker keeps its certificate, which lasts an hour and is renewed at 90%
   of that. The refused renewal ends atunnel's renewals, and atunnel then
   refuses new egress itself, so on the certificate alone that can take up to
@@ -111,8 +113,42 @@ if it is stuck. A `REVERTING` actor can't be quarantined until the revert
 finishes, because a revert discards snapshots; retry the call.
 
 If the suspend fails and termination also fails, the quarantine stays in place
-but open connections may remain. Retry the call to finish termination. A retry
-does not terminate after the quarantine is released.
+but execution may continue. Gateway revocation still closes its open tunnels.
+Retry the call to finish termination. A retry does not terminate after the
+quarantine is released.
+
+## Open tunnel revocation and availability
+
+On this experimental, unqualified fork, both agentgateway and atenet/Envoy
+continue authenticated `GetActor` checks while tunnels are open. Tunnels for
+one certified atespace/name/UID share one poll per gateway replica. Each
+retains the UID and optional activation from its verified certificate; a
+lookup never supplies a missing activation. UID mismatch precedes activation
+mismatch, then quarantine. Certificates without activation have UID-bound
+revocation only: their tunnels survive an activation change. Ordinary holds
+leave tunnels open.
+
+Quarantine, identity mismatch, deletion, failed or late lookups, and overdue
+scheduling close the original tunnels without relying on the worker. This
+covers HTTP connections, pooled HTTP/2 streams, TLS passthrough and idle or
+incomplete TLS inspection. Release permits a fresh CONNECT; it never reopens
+an old tunnel. Already-forwarded upstream work can continue after closure.
+
+Q6 is always on and fail-closed. **An ateapi outage of about 7 seconds closes
+every open egress tunnel for every actor, including actors that are not
+quarantined.** There is no opt-out. Checks have a five-second maximum interval
+and a two-second RPC deadline, followed by a one-second local hard-close
+budget. The eight-second deployment close target remains unqualified under
+control-plane load. See [the availability follow-up](https://github.com/solo-io/picket/issues/238).
+
+Monitor agentgateway's `substrate_revocation_*` lookup/failure/close counters
+and active binding/tunnel gauges. atenet exports
+`atenet.router.revocation.*` lookup/failure/overdue counters and actor/tunnel
+gauges. Envoy's `ate_egress.revocation.closed` counts network close requests;
+`ate_egress.revocation.stream_closed` counts outer CONNECT resets. Rising
+lookup failures or overdue checks with closes indicate loss of continuing
+authorization; a successful health check alone does not establish tunnel
+freshness. See the [Envoy module details](../../cmd/dataplane/envoy/dynamic-modules/egress-policy/README.md#tunnel-revocation).
 
 ## Evidence
 
@@ -169,14 +205,15 @@ kubectl -n ate-system set env deployment/<release>-atenet-egress \
 ```
 
 The event includes `reason_code`, the certified actor identity and
-`connect_authority`.
+`connect_authority`. To collect continuing-check revocations too, enable the
+separate `agentgateway::substrate::connect_revocation=warn` target. atenet
+records periodic checks on `connect_revocation_check` and actual Envoy closes
+on `connect_revocation`; capability values are never logged.
 The chart currently sets `RUST_LOG` to `debug`; keep this override in your
 deployment configuration so a Helm upgrade does not reset it.
 
 ## Out of scope
 
-- Closing open connections without stopping the workload. That needs an
-  agentgateway change to end tunnels when an actor is quarantined.
 - Cancelling upstream work that was already forwarded.
 - Quarantining every actor of a template or an atespace.
 - Exporting snapshots, or restoring one into an isolated environment.
