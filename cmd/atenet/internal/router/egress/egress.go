@@ -201,21 +201,18 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	}
 	slog.InfoContext(ctx, "egress tunnel opened: requests inside it are decided one by one",
 		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host), slog.Int("sniRules", len(rules)))
-	// Legacy certificates keep their existing CONNECT behavior. Exact-run
-	// revocation applies only when the verified certificate has an activation.
+	// Every verified actor gets continuing authorization. A missing certified
+	// activation stays unset; it cannot be inferred from the current actor.
 	identity, _ := substratex509.ActorIdentityFromCertificate(certified.leaf)
 	metadata := dynamicMetadata.Fields[extproc.EgressMetadataNamespace].GetStructValue().Fields
 	if leg == extproc.EgressFilterChainName {
-		metadata["revocation_mode"] = structpb.NewStringValue("legacy")
-	}
-	if leg == extproc.EgressFilterChainName && identity != nil && identity.ActivationId != "" {
 		token, err := h.revocations.admit(certified, checkedAt)
 		if err != nil {
 			return extproc.Result{}, extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err, "egress revocation unavailable")
 		}
 		metadata["revocation_mode"] = structpb.NewStringValue("required")
 		metadata["revocation_token"] = structpb.NewStringValue(token)
-		binding, err := json.Marshal(map[string]string{"atespace": identity.Atespace, "actor": identity.ActorName, "actor_uid": identity.ActorUid, "activation": identity.ActivationId, "authority": md.Host})
+		binding, err := json.Marshal(map[string]string{"atespace": identity.Atespace, "actor": identity.ActorName, "actor_uid": identity.ActorUid, "activation_id": identity.ActivationId, "authority": md.Host})
 		if err != nil {
 			return extproc.Result{}, err
 		}

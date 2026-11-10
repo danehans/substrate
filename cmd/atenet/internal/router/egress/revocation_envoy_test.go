@@ -22,7 +22,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"google.golang.org/protobuf/proto"
 	"io"
 	"net"
 	"net/http"
@@ -42,17 +44,41 @@ import (
 // Run with -tags envoyintegration after building Q6_ENVOY_IMAGE from this tree.
 // An explicitly selected integration lane fails if Docker or its image is absent.
 func TestEnvoyRevokesEstablishedConnections(t *testing.T) {
-	for _, mode := range []string{"passthrough", "passthrough-tls", "mitm-http2", "passthrough-gateway-loss", "idle-connect", "partial-clienthello"} {
-		t.Run(mode, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	cases := []struct{ mode, activation, trigger string }{}
+	for _, activation := range []string{"", "activation-1"} {
+		for _, mode := range []string{"passthrough", "passthrough-tls", "mitm-http2", "passthrough-gateway-loss", "idle-connect", "partial-clienthello"} {
+			cases = append(cases, struct{ mode, activation, trigger string }{mode, activation, "quarantine"})
+		}
+	}
+	for _, trigger := range []string{"uid", "deleted", "outage", "slow", "mixed-rotation", "mixed-quarantine"} {
+		cases = append(cases, struct{ mode, activation, trigger string }{"passthrough", "", trigger})
+	}
+	for _, tc := range cases {
+		mode, activation := tc.mode, tc.activation
+		t.Run(mode+"/"+activation+"/"+tc.trigger, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			actor := runningActor()
 			actor.Status.ActivationId = "activation-1"
 			var current atomic.Pointer[ateapi.Actor]
 			current.Store(actor)
-			api := &revocationAPI{get: func(context.Context) (*ateapi.Actor, error) { return current.Load(), nil }}
+			var unavailable, slow atomic.Bool
+			api := &revocationAPI{get: func(ctx context.Context) (*ateapi.Actor, error) {
+				if slow.Load() {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				if unavailable.Load() {
+					return nil, errors.New("ateapi unavailable")
+				}
+				a := current.Load()
+				if a == nil {
+					return nil, errors.New("actor deleted")
+				}
+				return a, nil
+			}}
 			r := newRevocations(api)
-			token, err := r.admit(revocationCert(t), time.Now())
+			token, err := r.admit(revocationCertWithActivation(t, activation), time.Now())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -148,7 +174,20 @@ func TestEnvoyRevokesEstablishedConnections(t *testing.T) {
           - name: envoy.filters.http.router
             typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router}`
 			}
-			body := strings.NewReplacer("TOKEN_PLACEHOLDER", token, "IDENTITY_PLACEHOLDER", `{"actor_uid":"`+testEgressActorUID+`","activation":"activation-1","authority":"fixture"}`, "ORIGIN_PORT_PLACEHOLDER", originPort, "CONTROL_PORT_PLACEHOLDER", controlPort, "INNER_TLS_PLACEHOLDER", innerTLS, "INNER_FILTER_PLACEHOLDER", innerFilter).Replace(string(config))
+			identity := `{"actor_uid":"` + testEgressActorUID + `","activation_id":"` + activation + `","authority":"fixture"}`
+			var second string
+			if strings.HasPrefix(tc.trigger, "mixed-") {
+				second, err = r.admit(revocationCert(t), time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				parts := strings.SplitN(string(config), "\n  - name: inner", 2)
+				outer := strings.SplitN(parts[0], "  - name: outer", 2)[1]
+				extra := "  - name: outer" + outer
+				extra = strings.NewReplacer("name: outer", "name: outer-bound", "port_value: 10000", "port_value: 10001", "TOKEN_PLACEHOLDER", second, "IDENTITY_PLACEHOLDER", `{"actor_uid":"`+testEgressActorUID+`","activation_id":"activation-1","authority":"fixture"}`).Replace(extra)
+				config = []byte(parts[0] + "\n" + extra + "\n  - name: inner" + parts[1])
+			}
+			body := strings.NewReplacer("TOKEN_PLACEHOLDER", token, "IDENTITY_PLACEHOLDER", identity, "ORIGIN_PORT_PLACEHOLDER", originPort, "CONTROL_PORT_PLACEHOLDER", controlPort, "INNER_TLS_PLACEHOLDER", innerTLS, "INNER_FILTER_PLACEHOLDER", innerFilter).Replace(string(config))
 			if err = os.WriteFile(filepath.Join(dir, "envoy.yaml"), []byte(body), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -156,7 +195,7 @@ func TestEnvoyRevokesEstablishedConnections(t *testing.T) {
 			if image == "" {
 				image = "q6-atenet-envoy:latest"
 			}
-			out, err := exec.CommandContext(ctx, "docker", "run", "-d", "-p", "127.0.0.1::10000", "-v", dir+":/q6:ro", image, "-c", "/q6/envoy.yaml", "--concurrency", "1").CombinedOutput()
+			out, err := exec.CommandContext(ctx, "docker", "run", "-d", "-p", "127.0.0.1::10000", "-p", "127.0.0.1::10001", "-v", dir+":/q6:ro", image, "-c", "/q6/envoy.yaml", "--concurrency", "1").CombinedOutput()
 			if err != nil {
 				t.Fatalf("start Envoy: %v %s", err, out)
 			}
@@ -199,7 +238,7 @@ func TestEnvoyRevokesEstablishedConnections(t *testing.T) {
 				t.Fatalf("dial %s: %v %s", address, err, logs)
 			}
 			defer connection.Close()
-			connection.SetDeadline(time.Now().Add(15 * time.Second))
+			connection.SetDeadline(time.Now().Add(30 * time.Second))
 			fmt.Fprint(connection, "CONNECT fixture:443 HTTP/1.1\r\nHost: fixture:443\r\n\r\n")
 			reader := bufio.NewReader(connection)
 			request := &http.Request{Method: "CONNECT"}
@@ -216,6 +255,8 @@ func TestEnvoyRevokesEstablishedConnections(t *testing.T) {
 				connection = secure
 				reader = bufio.NewReader(connection)
 			}
+			var mixedBound net.Conn
+			var mixedReader *bufio.Reader
 			var bodies []io.ReadCloser
 			if strings.HasPrefix(mode, "passthrough") {
 				connection.Write([]byte("open"))
@@ -249,16 +290,90 @@ func TestEnvoyRevokesEstablishedConnections(t *testing.T) {
 			if mode == "partial-clienthello" {
 				connection.Write([]byte{0x16, 0x03})
 			}
+			if strings.HasPrefix(tc.trigger, "mixed-") {
+				ports, err := exec.CommandContext(ctx, "docker", "port", container, "10001/tcp").CombinedOutput()
+				if err != nil {
+					t.Fatal(err)
+				}
+				bound, err := net.DialTimeout("tcp", strings.TrimSpace(string(ports)), 2*time.Second)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer bound.Close()
+				bound.SetDeadline(time.Now().Add(25 * time.Second))
+				fmt.Fprint(bound, "CONNECT fixture:443 HTTP/1.1\r\nHost: fixture:443\r\n\r\n")
+				boundReader := bufio.NewReader(bound)
+				mixedBound, mixedReader = bound, boundReader
+				response, err := http.ReadResponse(boundReader, request)
+				if err != nil || response.StatusCode != 200 {
+					t.Fatalf("bound CONNECT: %v", err)
+				}
+				echo := func(c net.Conn, reader *bufio.Reader) {
+					t.Helper()
+					if _, err := c.Write([]byte("live")); err != nil {
+						t.Fatal(err)
+					}
+					got := make([]byte, 4)
+					if _, err := io.ReadFull(reader, got); err != nil || string(got) != "live" {
+						t.Fatalf("tunnel not live: %v", err)
+					}
+				}
+				echo(bound, boundReader)
+				held := proto.Clone(actor).(*ateapi.Actor)
+				held.Status.Holds = []*ateapi.ActorHold{{Holder: "ordinary"}}
+				current.Store(held)
+				waitForEnvoyActorObservation(t, ctx, r, token, time.Now())
+				echo(connection, reader)
+				echo(bound, boundReader)
+				r.mu.Lock()
+				groups := len(r.actors)
+				shared := r.tunnels[token].check == r.tunnels[second].check
+				r.mu.Unlock()
+				if groups != 1 || !shared {
+					t.Fatal("mixed tunnels created a second poll group")
+				}
+				if tc.trigger == "mixed-rotation" {
+					rotated := proto.Clone(held).(*ateapi.Actor)
+					rotated.Status.ActivationId = "activation-2"
+					current.Store(rotated)
+					bound.SetDeadline(time.Now().Add(8 * time.Second))
+					if _, err := boundReader.ReadByte(); err == nil || isTimeout(err) {
+						t.Fatalf("bound tunnel did not close on rotation: %v", err)
+					}
+					echo(connection, reader)
+				}
+			}
 			quarantined := runningActor()
 			quarantined.Status.ActivationId = "activation-1"
 			quarantined.Status.Quarantine = &ateapi.ActorQuarantine{RequestId: "q1"}
 			placed := time.Now()
+			connection.SetDeadline(placed.Add(8 * time.Second))
+			if mixedBound != nil {
+				mixedBound.SetDeadline(placed.Add(8 * time.Second))
+			}
 			if mode == "passthrough-gateway-loss" {
 				if out, err := exec.CommandContext(ctx, "docker", "kill", container).CombinedOutput(); err != nil {
 					t.Fatalf("kill selected gateway: %v %s", err, out)
 				}
 			} else {
-				current.Store(quarantined)
+				switch tc.trigger {
+				case "uid":
+					quarantined.Metadata.Uid = "replacement"
+					current.Store(quarantined)
+				case "deleted":
+					current.Store(nil)
+				case "outage":
+					unavailable.Store(true)
+				case "slow":
+					slow.Store(true)
+					// Start this RPC promptly so its timeout is observed before the
+					// independent freshness watchdog reaches the same deadline.
+					r.mu.Lock()
+					r.tunnels[token].check.due = time.Now()
+					r.mu.Unlock()
+				default:
+					current.Store(quarantined)
+				}
 			}
 			// The actor remains RUNNING and this fixture never asks the worker to stop.
 			if mode == "idle-connect" || mode == "partial-clienthello" {
@@ -268,30 +383,74 @@ func TestEnvoyRevokesEstablishedConnections(t *testing.T) {
 				}
 			} else if strings.HasPrefix(mode, "passthrough") {
 				_, err = reader.ReadByte()
-				if err == nil {
-					t.Fatal("passthrough remained open")
+				if err == nil || isTimeout(err) {
+					t.Fatalf("passthrough remained open: %v", err)
 				}
 			} else {
 				for _, body := range bodies {
 					_, err = body.Read(make([]byte, 1))
 					body.Close()
-					if err == nil {
-						t.Fatal("HTTP/2 stream remained open")
+					if err == nil || isTimeout(err) {
+						t.Fatalf("HTTP/2 stream remained open: %v", err)
 					}
 				}
+			}
+			if tc.trigger == "mixed-quarantine" {
+				if _, err := mixedReader.ReadByte(); err == nil || isTimeout(err) {
+					t.Fatalf("quarantine left bound tunnel open: %v", err)
+				}
+				mixedBound.Close()
 			}
 			elapsed := time.Since(placed)
 			if elapsed > 8*time.Second {
 				t.Fatalf("close budget exceeded: %s", elapsed)
 			}
 			logs, _ := exec.Command("docker", "logs", container).CombinedOutput()
-			if mode != "passthrough-gateway-loss" && (!strings.Contains(string(logs), "connect_revocation reason=actor-quarantined") || !strings.Contains(string(logs), "activation-1")) {
+			reason := "actor-quarantined"
+			switch tc.trigger {
+			case "uid":
+				reason = "actor-uid-mismatch"
+			case "deleted", "outage", "slow":
+				reason = "actor-check-failed"
+			}
+			attributed := false
+			for _, line := range strings.Split(string(logs), "\n") {
+				if strings.Contains(line, "connect_revocation reason="+reason) && strings.Contains(line, `"activation_id":"`+activation+`"`) {
+					attributed = true
+				}
+			}
+			if mode != "passthrough-gateway-loss" && !attributed {
 				t.Fatalf("missing attributed socket close: %s", logs)
 			}
-			if strings.Contains(string(logs), token) {
+			if strings.Contains(string(logs), token) || second != "" && strings.Contains(string(logs), second) {
 				t.Fatal("control capability leaked to logs")
 			}
-			t.Logf("A=1 T=1 R=1 mode=%s close=%s GetActor=%d", mode, elapsed, api.calls.Load())
+			if strings.HasPrefix(tc.trigger, "mixed-") && permit(r, second).Code != 403 {
+				t.Fatal("quarantine did not close both mixed handles")
+			}
+			t.Logf("A=1 R=1 mode=%s activation=%q trigger=%s close=%s GetActor=%d", mode, activation, tc.trigger, elapsed, api.calls.Load())
 		})
+	}
+}
+
+func isTimeout(err error) bool {
+	var e net.Error
+	return errors.As(err, &e) && e.Timeout()
+}
+
+func waitForEnvoyActorObservation(t *testing.T, ctx context.Context, r *revocations, token string, after time.Time) {
+	t.Helper()
+	for {
+		r.mu.Lock()
+		checked := r.tunnels[token].check.checked
+		r.mu.Unlock()
+		if !checked.Before(after) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }

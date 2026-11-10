@@ -1817,7 +1817,7 @@ groups:
     instrument: gauge
     unit: "{actor}"
     stability: development
-    brief: Actor executions with active revocation handles.
+    brief: Actors with active revocation handles.
     annotations:
       substrate:
         emitted_by: [atenet-router]

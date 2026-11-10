@@ -156,9 +156,6 @@ impl<ENF: EnvoyHttpFilter> HttpFilter<ENF> for Filter {
     let mode = envoy
       .get_filter_state_bytes(b"dev.ate.revocation.mode")
       .map(|v| v.as_slice().to_vec());
-    if mode.as_deref() == Some(b"legacy") {
-      return abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
-    }
     if mode.as_deref() != Some(b"required") {
       self.close(envoy, "actor-check-failed");
       return abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
@@ -324,7 +321,7 @@ mod tests {
   }
   #[test]
   fn missing_required_state_fails_closed() {
-    for mode in [None, Some(b"required".as_slice())] {
+    for mode in [None, Some(b"required".as_slice()), Some(b"legacy".as_slice())] {
       let mut envoy = MockEnvoyHttpFilter::new();
       envoy.expect_get_filter_state_bytes().returning(move |key| {
         if key == b"dev.ate.revocation.mode" {
@@ -362,18 +359,7 @@ mod tests {
       );
     }
   }
-  #[test]
-  fn legacy_connect_preserves_existing_behavior() {
-    let mut envoy = MockEnvoyHttpFilter::new();
-    envoy
-      .expect_get_filter_state_bytes()
-      .times(1)
-      .returning(|_| Some(EnvoyBuffer::new(b"legacy")));
-    assert_eq!(
-      filter().on_request_headers(&mut envoy, false),
-      abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
-    );
-  }
+
   #[test]
   fn completion_fences_late_callbacks() {
     let mut envoy = MockEnvoyHttpFilter::new();

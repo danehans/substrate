@@ -43,22 +43,31 @@ import (
 	"go.ate.dev/substrate/internal/substratex509"
 )
 
+const revocationControlAddress = "127.0.0.1:18081"
+
 const revocationInterval = 5 * time.Second
 const revocationRPCDeadline = 2 * time.Second
 const revocationFreshness = revocationInterval + revocationRPCDeadline
 
 // executionKey is frozen from the verified CONNECT certificate.
 type executionKey struct{ atespace, name, uid, activation string }
+type actorKey struct{ atespace, name, uid string }
+
+func (key executionKey) actor() actorKey { return actorKey{key.atespace, key.name, key.uid} }
+
 type tunnelPermit struct {
 	key      executionKey
 	accessed time.Time
+	admitted time.Time
 	active   bool
 	check    *actorCheck
 	phases   map[string]bool
+	reason   string
 }
 type actorCheck struct {
 	checked, due time.Time
 	busy         bool
+	tunnels      map[*tunnelPermit]struct{}
 	reason       string
 }
 
@@ -67,17 +76,17 @@ type revocations struct {
 	mu                         sync.Mutex
 	api                        ateapi.ControlClient
 	tunnels                    map[string]*tunnelPermit
-	actors                     map[executionKey]*actorCheck
+	actors                     map[actorKey]*actorCheck
 	lookups, failures, overdue atomic.Int64
 }
 
 func newRevocations(api ateapi.ControlClient) *revocations {
-	return &revocations{api: api, tunnels: make(map[string]*tunnelPermit), actors: make(map[executionKey]*actorCheck)}
+	return &revocations{api: api, tunnels: make(map[string]*tunnelPermit), actors: make(map[actorKey]*actorCheck)}
 }
 func (r *revocations) admit(cert certifiedActor, checked time.Time) (string, error) {
 	id, err := substratex509.ActorIdentityFromCertificate(cert.leaf)
-	if err != nil || id == nil || id.ActorUid == "" || id.ActivationId == "" {
-		return "", fmt.Errorf("revocation requires certified UID and activation")
+	if err != nil || id == nil || id.ActorUid == "" {
+		return "", fmt.Errorf("revocation requires a certified actor UID")
 	}
 	var secret [32]byte
 	if _, err = rand.Read(secret[:]); err != nil {
@@ -91,14 +100,24 @@ func (r *revocations) admit(cert certifiedActor, checked time.Time) (string, err
 	key := executionKey{id.Atespace, id.ActorName, id.ActorUid, id.ActivationId}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	a := r.actors[key]
+	a := r.actors[key.actor()]
 	if a == nil || a.reason != "" || !now.Before(a.checked.Add(revocationFreshness)) {
 		delay := time.Duration((int(secret[0])<<8|int(secret[1]))%4900) * time.Millisecond
-		a = &actorCheck{checked: checked, due: checked.Add(delay)}
-		r.actors[key] = a
+		a = &actorCheck{checked: checked, due: checked.Add(delay), tunnels: make(map[*tunnelPermit]struct{})}
+		r.actors[key.actor()] = a
 	}
-	r.tunnels[token] = &tunnelPermit{key: key, accessed: now, check: a}
+	tunnel := &tunnelPermit{key: key, accessed: now, admitted: checked, check: a}
+	r.tunnels[token] = tunnel
+	a.tunnels[tunnel] = struct{}{}
 	return token, nil
+}
+
+// retire removes a capability from both indexes while mu is held.
+func (r *revocations) retire(token string) {
+	if tunnel := r.tunnels[token]; tunnel != nil {
+		delete(tunnel.check.tunnels, tunnel)
+	}
+	delete(r.tunnels, token)
 }
 
 // ServeHTTP authenticates possession of a per-CONNECT capability. It cannot
@@ -121,19 +140,24 @@ func (r *revocations) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	t := r.tunnels[token]
-	if t == nil {
+	if t == nil || now.Sub(t.accessed) >= 2*revocationInterval {
+		r.retire(token)
+		http.Error(w, "denied", http.StatusForbidden)
+		return
+	}
+	if req.URL.Path != "/permit" || req.URL.RawQuery != "" {
 		http.Error(w, "denied", http.StatusForbidden)
 		return
 	}
 	if req.Method == http.MethodDelete {
 		delete(t.phases, phase)
 		if len(t.phases) == 0 {
-			delete(r.tunnels, token)
+			r.retire(token)
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if req.Method != http.MethodPost || req.URL.Path != "/permit" {
+	if req.Method != http.MethodPost {
 		http.Error(w, "denied", http.StatusForbidden)
 		return
 	}
@@ -144,8 +168,11 @@ func (r *revocations) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	t.phases[phase] = true
 	t.active = true
 	t.accessed = now
-	if a.reason != "" || !now.Before(a.checked.Add(revocationFreshness)) {
-		reason := a.reason
+	if t.reason != "" || a.reason != "" || !now.Before(a.checked.Add(revocationFreshness)) {
+		reason := t.reason
+		if reason == "" {
+			reason = a.reason
+		}
 		if reason == "" {
 			reason = "actor-check-overdue"
 			a.reason = reason
@@ -168,17 +195,17 @@ func (r *revocations) run(ctx context.Context) {
 			return
 		case now := <-ticker.C:
 			r.mu.Lock()
-			live := make(map[executionKey]bool)
-			present := make(map[executionKey]bool)
+			live := make(map[actorKey]bool)
+			present := make(map[actorKey]bool)
 			for token, t := range r.tunnels {
 				if now.Sub(t.accessed) >= 2*revocationInterval {
-					delete(r.tunnels, token)
+					r.retire(token)
 					continue
 				}
-				present[t.key] = true
-				if t.active {
-					if r.actors[t.key] == t.check {
-						live[t.key] = true
+				present[t.key.actor()] = true
+				if t.active && t.reason == "" {
+					if r.actors[t.key.actor()] == t.check {
+						live[t.key.actor()] = true
 					}
 				}
 			}
@@ -204,7 +231,7 @@ func (r *revocations) run(ctx context.Context) {
 				select {
 				case slots <- struct{}{}:
 					a.busy = true
-					go func(key executionKey, a *actorCheck) { defer func() { <-slots }(); r.check(ctx, key, a) }(key, a)
+					go func(key actorKey, a *actorCheck) { defer func() { <-slots }(); r.check(ctx, key, a) }(key, a)
 				default:
 					// Backlog never moves a freshness deadline.
 				}
@@ -213,7 +240,7 @@ func (r *revocations) run(ctx context.Context) {
 		}
 	}
 }
-func (r *revocations) check(ctx context.Context, key executionKey, a *actorCheck) {
+func (r *revocations) check(ctx context.Context, key actorKey, a *actorCheck) {
 	started := time.Now()
 	r.lookups.Add(1)
 	ctx, cancel := context.WithTimeout(ctx, revocationRPCDeadline)
@@ -225,10 +252,6 @@ func (r *revocations) check(ctx context.Context, key executionKey, a *actorCheck
 		reason = "actor-check-failed"
 	case actor.GetMetadata().GetUid() != key.uid:
 		reason = "actor-uid-mismatch"
-	case actor.GetStatus().GetActivationId() != key.activation:
-		reason = "activation-mismatch"
-	case actor.GetStatus().GetQuarantine() != nil:
-		reason = "actor-quarantined"
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -239,13 +262,34 @@ func (r *revocations) check(ctx context.Context, key executionKey, a *actorCheck
 	if !time.Now().Before(a.checked.Add(revocationFreshness)) {
 		reason = "actor-check-overdue"
 	}
+	failed := reason != ""
+	for tunnel := range a.tunnels {
+		if tunnel.reason != "" {
+			continue
+		}
+		tunnel.reason = reason
+		if tunnel.reason == "" && tunnel.key.activation != "" && !tunnel.admitted.After(started) && tunnel.key.activation != actor.GetStatus().GetActivationId() {
+			tunnel.reason = "activation-mismatch"
+		}
+		if tunnel.reason == "" && actor.GetStatus().GetQuarantine() != nil {
+			tunnel.reason = "actor-quarantined"
+		}
+		if tunnel.reason != "" {
+			failed = true
+			slog.WarnContext(ctx, "egress tunnel revoked", "target", "connect_revocation_check", "reason", tunnel.reason, "atespace", tunnel.key.atespace, "actor", tunnel.key.name, "actor_uid", tunnel.key.uid, "activation_id", tunnel.key.activation)
+		}
+	}
+	if failed {
+		r.failures.Add(1)
+	}
+	if reason == "" && actor.GetStatus().GetQuarantine() != nil {
+		reason = "actor-quarantined"
+	}
 	if reason != "" {
 		a.reason = reason
-		r.failures.Add(1)
 		if reason == "actor-check-overdue" {
 			r.overdue.Add(1)
 		}
-		slog.WarnContext(ctx, "egress tunnel revoked", "target", "connect_revocation_check", "reason", reason, "atespace", key.atespace, "actor", key.name, "actor_uid", key.uid, "activation", key.activation)
 		return
 	}
 	// Use RPC start, rather than completion, as the freshness origin.
@@ -271,7 +315,7 @@ func (h *Handler) RunRevocations(ctx context.Context) error {
 	}()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	listener, err := net.Listen("tcp", "127.0.0.1:18081")
+	listener, err := net.Listen("tcp", revocationControlAddress)
 	if err != nil {
 		return err
 	}
@@ -312,11 +356,11 @@ func (r *revocations) registerMetrics() (metric.Registration, error) {
 	return meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		active := map[*actorCheck]bool{}
+		active := map[actorKey]bool{}
 		var count int64
 		for _, t := range r.tunnels {
 			if t.active {
-				active[t.check] = true
+				active[t.key.actor()] = true
 				count++
 			}
 		}

@@ -15,6 +15,11 @@
 package router
 
 import (
+	"fmt"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"net"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -260,5 +265,96 @@ func TestEgressManifestsConnectAccessLogIncludesProtocol(t *testing.T) {
 		if !strings.Contains(format, "protocol=%PROTOCOL%") {
 			t.Errorf("connect access_log[%d] format %q does not log protocol=%%PROTOCOL%%", i, format)
 		}
+	}
+}
+
+// The bearer control endpoint must never be reachable through a Service or route.
+func TestRevocationControlIsPodLocal(t *testing.T) {
+	const controlPort = 18081
+	config := parseEnvoyAdminBootstrap(t, envoyConfig(t))
+	found := false
+	for _, cluster := range config.StaticResources.Clusters {
+		if cluster.Name != "revocation_control" {
+			continue
+		}
+		for _, ep := range cluster.LoadAssignment.Endpoints {
+			for _, lb := range ep.LbEndpoints {
+				address := lb.Endpoint.Address.SocketAddress
+				if ip := net.ParseIP(address.Address); ip == nil || !ip.IsLoopback() || address.PortValue != controlPort {
+					t.Errorf("revocation control endpoint is not loopback:%d: %+v", controlPort, address)
+				}
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no revocation control endpoint")
+	}
+	var checkRoutes func(any)
+	checkRoutes = func(value any) {
+		switch v := value.(type) {
+		case map[string]any:
+			if v["cluster"] == "revocation_control" {
+				t.Error("gateway routes to revocation control")
+			}
+			for _, child := range v {
+				checkRoutes(child)
+			}
+		case []any:
+			for _, child := range v {
+				checkRoutes(child)
+			}
+		}
+	}
+	var bootstrap any
+	if err := yaml.Unmarshal([]byte(envoyConfig(t)), &bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	checkRoutes(bootstrap)
+	raw, err := os.ReadFile(egressManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployments, services := 0, 0
+	for _, doc := range strings.Split(string(raw), "\n---\n") {
+		var head struct {
+			Kind string `json:"kind"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &head); err != nil {
+			t.Fatal(err)
+		}
+		switch head.Kind {
+		case "Deployment":
+			deployments++
+			var deployment appsv1.Deployment
+			if err := yaml.Unmarshal([]byte(doc), &deployment); err != nil {
+				t.Fatal(err)
+			}
+			pod := deployment.Spec.Template.Spec
+			if pod.HostNetwork {
+				t.Error("revocation listener would share host network")
+			}
+			for _, c := range append(pod.InitContainers, pod.Containers...) {
+				for _, port := range c.Ports {
+					if port.ContainerPort == controlPort || port.HostPort == controlPort {
+						t.Errorf("container %s exposes revocation port", c.Name)
+					}
+				}
+			}
+		case "Service":
+			services++
+			var service corev1.Service
+			if err := yaml.Unmarshal([]byte(doc), &service); err != nil {
+				t.Fatal(err)
+			}
+			for _, port := range service.Spec.Ports {
+				if port.Port == controlPort || port.TargetPort.IntVal == controlPort || port.TargetPort.StrVal == fmt.Sprint(controlPort) || port.NodePort == controlPort {
+					t.Errorf("Service %s exposes revocation port", service.Name)
+				}
+			}
+		}
+	}
+	if deployments == 0 || services == 0 {
+		t.Fatal("manifest has no Deployment or Service to check")
 	}
 }
