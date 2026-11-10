@@ -26,6 +26,7 @@ package egress
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -78,7 +79,8 @@ const deniedBody = "egress denied"
 // Handler authenticates the actor behind each egress CONNECT and authorizes
 // the traffic inside the tunnel against the actor's EgressPolicy.
 type Handler struct {
-	apiClient ateapi.ControlClient
+	apiClient   ateapi.ControlClient
+	revocations *revocations
 	// loadActorIdentityRoots yields the actor-identity CA bundle every actor
 	// certificate must chain to. An error fails the CONNECT closed.
 	loadActorIdentityRoots func() (*x509.CertPool, error)
@@ -112,6 +114,7 @@ func New(apiClient ateapi.ControlClient, loadActorIdentityRoots func() (*x509.Ce
 	}
 	return &Handler{
 		apiClient:              apiClient,
+		revocations:            newRevocations(apiClient),
 		loadActorIdentityRoots: loadActorIdentityRoots,
 		policies:               newPolicyCache(apiClient, policyCacheTTL),
 		actorJWTs:              actorjwt.New(apiClient),
@@ -170,6 +173,7 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	}
 
 	actorRef := certified.ref
+	checkedAt := time.Now()
 	if err := h.validateActor(ctx, certified, md.Host); err != nil {
 		return extproc.Result{}, err
 	}
@@ -197,6 +201,26 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	}
 	slog.InfoContext(ctx, "egress tunnel opened: requests inside it are decided one by one",
 		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host), slog.Int("sniRules", len(rules)))
+	// Legacy certificates keep their existing CONNECT behavior. Exact-run
+	// revocation applies only when the verified certificate has an activation.
+	identity, _ := substratex509.ActorIdentityFromCertificate(certified.leaf)
+	metadata := dynamicMetadata.Fields[extproc.EgressMetadataNamespace].GetStructValue().Fields
+	if leg == extproc.EgressFilterChainName {
+		metadata["revocation_mode"] = structpb.NewStringValue("legacy")
+	}
+	if leg == extproc.EgressFilterChainName && identity != nil && identity.ActivationId != "" {
+		token, err := h.revocations.admit(certified, checkedAt)
+		if err != nil {
+			return extproc.Result{}, extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err, "egress revocation unavailable")
+		}
+		metadata["revocation_mode"] = structpb.NewStringValue("required")
+		metadata["revocation_token"] = structpb.NewStringValue(token)
+		binding, err := json.Marshal(map[string]string{"atespace": identity.Atespace, "actor": identity.ActorName, "actor_uid": identity.ActorUid, "activation": identity.ActivationId, "authority": md.Host})
+		if err != nil {
+			return extproc.Result{}, err
+		}
+		metadata["revocation_identity"] = structpb.NewStringValue(string(binding))
+	}
 	res := allow()
 	res.DynamicMetadata = dynamicMetadata
 	return res, nil

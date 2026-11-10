@@ -1805,3 +1805,78 @@ groups:
   # docs/metrics/substrate.yaml records them as families, with the version of
   # controller-runtime that the list comes from.
   # ---------------------------------------------------------------------------
+
+  - id: metric.atenet.router.revocation.actors
+    type: metric
+    metric_name: atenet.router.revocation.actors
+    instrument: gauge
+    unit: "{actor}"
+    stability: development
+    brief: Actor executions with active revocation handles.
+    annotations:
+      substrate:
+        emitted_by: [atenet-router]
+        golden_signals: [saturation]
+        code_anchor: cmd/atenet/internal/router/egress/revocation.go
+        cuj: Are active actor tunnels checked within their authorization freshness deadline?
+    attributes: []
+
+  - id: metric.atenet.router.revocation.tunnels
+    type: metric
+    metric_name: atenet.router.revocation.tunnels
+    instrument: gauge
+    unit: "{tunnel}"
+    stability: development
+    brief: Active exact-run tunnel handles.
+    annotations:
+      substrate:
+        emitted_by: [atenet-router]
+        golden_signals: [saturation]
+        code_anchor: cmd/atenet/internal/router/egress/revocation.go
+        cuj: Are active actor tunnels checked within their authorization freshness deadline?
+    attributes: []
+
+  - id: metric.atenet.router.revocation.lookups
+    type: metric
+    metric_name: atenet.router.revocation.lookups
+    instrument: counter
+    unit: "{lookup}"
+    stability: development
+    brief: Authenticated actor lookups for continuing tunnel authorization.
+    annotations:
+      substrate:
+        emitted_by: [atenet-router]
+        golden_signals: [saturation]
+        code_anchor: cmd/atenet/internal/router/egress/revocation.go
+        cuj: Are active actor tunnels checked within their authorization freshness deadline?
+    attributes: []
+
+  - id: metric.atenet.router.revocation.failures
+    type: metric
+    metric_name: atenet.router.revocation.failures
+    instrument: counter
+    unit: "{check}"
+    stability: development
+    brief: Actor check failures or revocations.
+    annotations:
+      substrate:
+        emitted_by: [atenet-router]
+        golden_signals: [saturation]
+        code_anchor: cmd/atenet/internal/router/egress/revocation.go
+        cuj: Are active actor tunnels checked within their authorization freshness deadline?
+    attributes: []
+
+  - id: metric.atenet.router.revocation.overdue
+    type: metric
+    metric_name: atenet.router.revocation.overdue
+    instrument: counter
+    unit: "{actor}"
+    stability: development
+    brief: Actor checks that exceeded their freshness deadline.
+    annotations:
+      substrate:
+        emitted_by: [atenet-router]
+        golden_signals: [saturation]
+        code_anchor: cmd/atenet/internal/router/egress/revocation.go
+        cuj: Are active actor tunnels checked within their authorization freshness deadline?
+    attributes: []
