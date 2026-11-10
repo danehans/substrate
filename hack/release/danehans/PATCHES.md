@@ -113,3 +113,35 @@ names its upstream proposal and the condition that retires it.
    - Replacement condition: an agentgateway release contains the change and
      a `kagent-dev/substrate` release bundles that gateway; the default then
      returns to the base chart's gateway.
+
+## Q6 tunnel revocation in both gateways
+
+The chart's agentgateway and the atenet/Envoy gateway continue authenticated
+`GetActor` checks for open tunnels. The binding comes only from the verified
+certificate. Tunnels with the same certified atespace/name/UID share one poll
+per replica, including certificates without `ActivationId`. Each tunnel keeps
+its own optional certified activation. UID mismatch precedes activation
+mismatch, which precedes quarantine. UID-only tunnels survive activation
+changes and have no exact-run binding. Ordinary holds do not revoke tunnels.
+
+Quarantine, identity mismatch, deletion and failed/late/overdue checks close
+tunnels without worker teardown. Q6 is always on and fail-closed: an ateapi
+outage of about 7 seconds closes every open egress tunnel for every actor.
+The five-second maximum poll interval, two-second RPC deadline and one-second
+local hard-close budget give an eight-second design target, which remains
+unqualified under deployed control-plane load. Already-forwarded upstream work
+may continue after socket closure. See
+[the availability follow-up](https://github.com/solo-io/picket/issues/238).
+
+The gateway's `agentgateway::substrate::connect_revocation` target records
+continuing-check revocations separately from new-CONNECT refusals. Its
+`substrate_revocation_*` metrics report active bindings/tunnels, lookups,
+failures and closes. atenet exports `atenet.router.revocation.*` counters and
+gauges; Envoy reports `ate_egress.revocation.closed` and
+`ate_egress.revocation.stream_closed`. The
+[module README](../../../cmd/dataplane/envoy/dynamic-modules/egress-policy/README.md#tunnel-revocation)
+describes control isolation, freshness and qualification limits.
+
+- Tracking: [solo-io/picket#215](https://github.com/solo-io/picket/issues/215).
+- Replacement condition: retire this downstream patch when the supported
+  runtime ships and qualifies the same continuing-authorization semantics.
