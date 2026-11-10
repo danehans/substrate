@@ -63,6 +63,16 @@ The egress PEP MUST serve TLS using a certificate that is valid for the configur
 
 The PEP MUST require and verify the client certificate before accepting a CONNECT request. It MUST verify the certificate chain and lifetime against the Actor Identity CA, require the client authentication usage, and require exactly one valid `ActorIdentity` extension whose atespace, actor name, and actor UID are present. The current extension OID is `1.3.6.1.4.1.11129.2.12.2`; it is allocated under Google's enterprise number and will change after the CNCF donation is complete. The certificate's worker-for-actor URI SAN MUST identify the same actor as the extension. The PEP MUST then confirm with ate-api-server that the actor still exists, that its current UID matches the certificate, and that it is placed on a worker: `RESUMING` (booting or restoring there) or `RUNNING`. If the extension carries `ActivationId`, it MUST match the actor's current `status.activation_id`. A certificate without `ActivationId` receives the UID check only, so certificates issued before the activation field remain usable. The PEP MUST reject the CONNECT request if any of these checks fail.
 
+The downstream atenet/Envoy guards register every admitted certificate for
+continuing authorization, including certificates without `ActivationId`.
+Tunnels for the same certified atespace, actor name and UID share one poll.
+An activation is compared only when the certificate carries one; it is never
+filled from a lookup. A UID-only tunnel therefore survives activation changes.
+Quarantine, UID replacement, deletion and failed or overdue checks close it.
+See the [module README](../../cmd/dataplane/envoy/dynamic-modules/egress-policy/README.md#tunnel-revocation)
+for timings, fail-closed availability costs and qualification limits.
+
+
 The atenet egress router applies these checks on every new CONNECT using its
 existing `GetActor` call. A missing or malformed `ActorIdentity` extension is
 refused. The chart's agentgateway has a separate egress path; this atenet

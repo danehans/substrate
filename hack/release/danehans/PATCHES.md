@@ -113,3 +113,18 @@ names its upstream proposal and the condition that retires it.
    - Replacement condition: an agentgateway release contains the change and
      a `kagent-dev/substrate` release bundles that gateway; the default then
      returns to the base chart's gateway.
+
+## atenet/Envoy continuing authorization
+
+Every verified actor certificate receives a revocation capability, including
+one without `ActivationId`. Tunnels with the same certified atespace/name/UID
+share one poll per replica. Each tunnel retains only its optional certified
+activation. UID-only tunnels survive activation changes; they have no exact-run
+binding. Quarantine, UID replacement, deletion and failed/late/overdue checks
+close them. Ordinary holds do not. Q6 remains always on and fail-closed.
+The [module README](../../../cmd/dataplane/envoy/dynamic-modules/egress-policy/README.md#tunnel-revocation)
+describes control isolation, freshness and qualification limits.
+
+- Tracking: solo-io/picket#215.
+- Replacement condition: retire this downstream patch when the supported
+  runtime ships and qualifies the same continuing-authorization semantics.

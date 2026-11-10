@@ -1,7 +1,7 @@
 # Envoy Substrate Egress Policy Implementation
 
 This Envoy dynamic module stores and enforces egress policy and checks ongoing
-exact-run tunnel authorization. Its policy extensions minimize
+tunnel authorization. Its policy extensions minimize
 memory usage by Substrate egress policies.
 
 To minimize memory usage egress policies are hashed using [Rapidhash](https://docs.rs/rapidhash/latest/rapidhash/)
@@ -61,7 +61,7 @@ metrics:
 | `ate_egress.parse_errors` | Counter | Number of times `EgressPolicy::new_from_metadata` returned `None` due to missing or malformed policy metadata. |
 | `ate_egress.policy_shared` | Counter | Number of times a `CONNECT` request reused an `EgressPolicy` already present in the worker thread's local store. |
 
-## Exact-run tunnel revocation
+## Tunnel revocation
 
 The downstream fork guards the outer CONNECT stream with
 `envoy_substrate_revocation_http`, after its trusted filter state is set. This
@@ -70,16 +70,22 @@ It also installs `envoy_substrate_revocation` before the HTTP
 connection manager and passthrough TCP proxy in every internal egress chain.
 The CONNECT ext_proc handler derives its binding from the verified workload
 certificate and issues an opaque per-CONNECT capability. Envoy carries it in
-shared filter state; it never comes from actor request headers. A separate
-trusted `legacy` marker preserves CONNECT behavior for certificates without an
-activation. Missing required state closes the connection.
+shared filter state; it never comes from actor request headers. The
+activation is retained only when the certificate carries one. A certificate
+without an activation still receives a capability and continuing UID checks;
+its binding and `activation_id` log field remain empty. Neither admission nor
+later observations fill in its activation. Missing or unrecognized required state closes the connection.
 
 The network filter checks its capability against the loopback-only atenet
 control listener on port 18081. The sidecar polls authenticated `GetActor`
-once per active certificate-bound execution per replica, with jitter, a
-maximum five-second interval and a two-second RPC deadline. A UID or activation
-mismatch takes precedence over quarantine. Quarantine, deletion, lookup failure
-or stale scheduling invalidates existing handles. An ordinary hold does not.
+once per active certified actor (atespace, name and UID) per replica, with
+jitter, a maximum five-second interval and a two-second RPC deadline. Tunnels
+with and without an activation share that poll. A UID mismatch takes
+precedence over a certified activation mismatch, which precedes quarantine.
+An activation change closes only tunnels whose certificate names the old
+activation. UID-only tunnels stay open across activation changes because they
+have no authenticated run binding; they cannot establish exact-run revocation. Quarantine, deletion, lookup
+failure or stale scheduling invalidates existing handles. An ordinary hold does not.
 Release permits a fresh admitted CONNECT; it never reopens old handles.
 
 A monotonic seven-second freshness watchdog closes MITM HTTP/2 streams and
@@ -87,8 +93,8 @@ passthrough copies. Local capability checks run every 500 ms; the scheduler
 runs every 100 ms. The outer CONNECT HCM disables delayed close. The eight-second
 end-to-end budget remains an unqualified target under runtime scheduling and
 control-plane load. In-flight upstream work may outlive socket closure.
-Control-plane outages can close permitted connections. Pending or abandoned
-capabilities expire after ten seconds without a local heartbeat.
+Q6 is always on and fail-closed: control-plane outages close permitted
+connections. Pending or abandoned capabilities expire after ten seconds without a local heartbeat.
 
 The module logs `connect_revocation` with its reason and frozen UID, activation
 and authority, without logging capabilities. `ate_egress.revocation.closed`
@@ -106,6 +112,9 @@ Q6_ENVOY_IMAGE=q6-atenet-envoy:latest go test -tags envoyintegration ./cmd/atene
 ```
 
 The fixture uses real Envoy connections and a synthetic authenticated actor
-view. It covers TLS passthrough and TLS-terminated pooled HTTP/2 without worker
-teardown; it does not qualify a deployed ateapi, independent gateway replicas
+view. It covers TLS passthrough, TLS-terminated pooled HTTP/2 and incomplete TLS
+inspection with and without a certified activation. UID-only cases cover
+quarantine, replacement, deletion, outage and slow checks. Mixed tunnels share
+one poll, survive ordinary holds, and close selectively on activation rotation
+or together on quarantine, without worker teardown; it does not qualify a deployed ateapi, independent gateway replicas
 or a Picket processor response.
