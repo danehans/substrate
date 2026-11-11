@@ -167,6 +167,10 @@ atenetRouter:
 atenetEgress:
   agentgateway:
     logLevel: info
+    # How the gateway pools upstream connections for actor requests.
+    # perExecution gives each actor certificate binding its own connections and
+    # closes them with its tunnels. shared keeps one pool for all actors.
+    upstreamConnections: perExecution
     resources:
       requests:
         cpu: 50m
