@@ -134,6 +134,20 @@ covers HTTP connections, pooled HTTP/2 streams, TLS passthrough and idle or
 incomplete TLS inspection. Release permits a fresh CONNECT; it never reopens
 an old tunnel. Already-forwarded upstream work can continue after closure.
 
+agentgateway also closes its own pooled upstream connections. Each certificate
+binding on a replica has its own upstream connections for HTTP and intercepted
+HTTPS requests. They close when the binding is revoked or its last tunnel on
+that replica closes, and no other binding or actor uses them. This costs one
+set of upstream connections per live binding per destination on each replica.
+Set `atenetEgress.agentgateway.upstreamConnections: shared` to keep one pool
+for all actors. Revocation then still closes the actor's tunnels, but a pooled
+upstream connection stays open until the pool's idle timeout and can serve
+other actors.
+
+The atenet/Envoy gateway does not close an idle pooled upstream connection
+when it revokes a tunnel. See
+[solo-io/picket#249](https://github.com/solo-io/picket/issues/249).
+
 Q6 is always on and fail-closed. **An ateapi outage of about 7 seconds closes
 every open egress tunnel for every actor, including actors that are not
 quarantined.** There is no opt-out. Checks have a five-second maximum interval
