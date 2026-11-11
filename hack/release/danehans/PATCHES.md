@@ -133,6 +133,14 @@ unqualified under deployed control-plane load. Already-forwarded upstream work
 may continue after socket closure. See
 [the availability follow-up](https://github.com/solo-io/picket/issues/238).
 
+agentgateway scopes its pooled upstream connections for actor requests to the
+certificate binding and closes them with the binding's tunnels. The chart's
+`atenetEgress.agentgateway.upstreamConnections` selects `perExecution`, the
+default, or `shared`, which keeps one pool for all actors and leaves a pooled
+upstream connection open after revocation. The atenet/Envoy gateway leaves an
+idle pooled upstream connection open after revocation
+([solo-io/picket#249](https://github.com/solo-io/picket/issues/249)).
+
 The gateway's `agentgateway::substrate::connect_revocation` target records
 continuing-check revocations separately from new-CONNECT refusals. Its
 `substrate_revocation_*` metrics report active bindings/tunnels, lookups,
@@ -142,6 +150,7 @@ gauges; Envoy reports `ate_egress.revocation.closed` and
 [module README](../../../cmd/dataplane/envoy/dynamic-modules/egress-policy/README.md#tunnel-revocation)
 describes control isolation, freshness and qualification limits.
 
-- Tracking: [solo-io/picket#215](https://github.com/solo-io/picket/issues/215).
+- Tracking: [solo-io/picket#215](https://github.com/solo-io/picket/issues/215)
+  and [solo-io/picket#245](https://github.com/solo-io/picket/issues/245).
 - Replacement condition: retire this downstream patch when the supported
   runtime ships and qualifies the same continuing-authorization semantics.
