@@ -8,11 +8,41 @@ names its upstream proposal and the condition that retires it.
 
 ## Functional patches
 
-This packaging-only branch does not include the activation ID, certificate
-binding, lifecycle receipt, actor hold, or quarantine changes. Their ports
-and the selected gateway require integration and validation before release.
-The integration owner must replace this section with the integrated patch
-contracts and upstream replacement conditions before preparing a release.
+1. **Activation identity and lifecycle receipts.** Assignment, RESUMING,
+   activation identity and the resume receipt commit together. Re-entering
+   resume rotates the activation; clearing assignment clears it. Conditional
+   lifecycle calls check the expected actor UID and activation and retain
+   receipts under stable request IDs. Completed retries preserve their
+   original evidence. See the [lifecycle contract](../../../docs/reference/api-guide.md#conditional-suspend-and-resume).
+   - Upstream proposals:
+     [activation identity](https://github.com/agent-substrate/substrate/issues/1041)
+     and [conditional lifecycle](https://github.com/agent-substrate/substrate/issues/3065).
+2. **Holds and quarantine.** Holder-scoped holds prevent resume. Quarantine
+   atomically records its hold, state and receipt, then suspends a running
+   activation or falls back to termination. Inspect grants quarantine admins
+   access to stored native policy without granting network access. Termination
+   fallback releases the actor before separately finalizing its receipt; an
+   interruption can leave an unknown pending outcome. See the
+   [quarantine contract](../../../docs/guides/actor-quarantine.md).
+   - Upstream proposals:
+     [actor holds](https://github.com/agent-substrate/substrate/issues/3066)
+     and [quarantine](https://github.com/agent-substrate/substrate/issues/3463).
+3. **Certificate and network binding.** Mint and renewal retain the activation
+   supplied by Run or Restore. atenet CONNECT checks the verified certificate's
+   UID and optional activation before quarantine. Paired Envoy guards continue
+   those checks through listener inspection and established traffic. UID-only
+   certificates remain UID-bound; current state never fills a missing
+   activation. See the [Envoy contract](../../../cmd/dataplane/envoy/dynamic-modules/egress-policy/README.md#tunnel-revocation).
+   - Upstream proposal:
+     [authenticated activation identity](https://github.com/agent-substrate/substrate/issues/1041).
+
+Retire these functional patches when a supported `kagent-dev/substrate`
+release provides the corresponding contracts and Picket qualifies that runtime.
+Worker crash/suspend notifications and atelet Checkpoint/Terminate still lack
+activation identity. The suspend authorization race remains; these controls
+do not guarantee end-to-end stale-message rejection. Mixed patched/unpatched
+writers and rollback remain unqualified. Network closure does not establish
+idle origin-socket retirement or cancel work already accepted upstream.
 
 ## Packaging changes
 
@@ -49,11 +79,16 @@ contracts and upstream replacement conditions before preparing a release.
 
 ## Gateway integration
 
-The selected gateway source contains continuing CONNECT authorization and
-execution-scoped upstream pools. The chart selects `perExecution` by default;
-`shared` opts into a shared upstream pool. Its revocation behavior depends on
-the integrated actor identity and quarantine contracts. Validate those
-contracts with the gateway before release. No runtime qualification is claimed.
+The chart and `agentgateway.env` still name the historical source
+`8400847e8046669145f287506661219d201a95a2` and its matching image index. That
+pair does not contain the v1.0.1 actor-state alignment in the reviewed gateway
+source `7696eaaf931945d8449012ebb4973d6bf2d4889a`. A fresh image of that source,
+with verified platform manifests and provenance, is required before release.
+The old digest must never be relabeled as that newer source. See the
+[gateway source and artifact contract](https://github.com/danehans/agentgateway/pull/7#issuecomment-6831601211).
 
-The atenet/Envoy revocation patches and their documentation belong to the
-separate runtime integration. They are not present in this packaging branch.
+The chart selects `perExecution` upstream pooling by default; `shared` opts
+into a shared pool. Integrated gateway behavior still requires validation of
+the final source/image pair. The atenet/Envoy guards are present, but idle
+origin-pool retirement remains a distinct limitation. Neither the eight-second
+closure target under load nor the combined runtime is qualified.
