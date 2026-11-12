@@ -87,7 +87,6 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapi.Min
 			"Actor %s is quarantined; no certificate is minted for it", resources.ActorRefFromActor(dbActor))
 	}
 
-
 	// Parse the CSR.
 	csr, err := x509.ParseCertificateRequest(req.GetCertificateSigningRequest())
 	if err != nil {

@@ -255,35 +255,6 @@ func TestActorQuarantine_RefusesEveryPath(t *testing.T) {
 	wantQuarantined(t, "GetActorEgressPolicy after an update", err)
 }
 
-// Once quarantined, the Actor's worker gets no new certificate, also between
-// the write that places the quarantine and the suspend, while the Actor
-// still runs. The quarantine here is that first write alone.
-func TestActorQuarantine_NoCertificateAfterQuarantine(t *testing.T) {
-	f := newReceiptFixture(t, "ns-quarantine-cert")
-	activation := f.resume()
-	actor := f.get()
-	minter := newActivationMinter(t, f.tc, "node1", actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(), f.ref, actor.GetMetadata().GetUid())
-	minter.mustMint("before the quarantine", activation)
-
-	actorRef := resources.ActorRefFromObjectRef(f.ref)
-	if _, _, err := f.tc.persistence.PlaceActorHold(f.ctx, actorRef, func(*ateapi.Actor) error { return nil }, func(stored *ateapi.Actor) *ateapi.LifecycleReceipt {
-		return &ateapi.LifecycleReceipt{
-			RequestId:  "q-1",
-			ActorUid:   stored.GetMetadata().GetUid(),
-			Hold:       &ateapi.ActorHold{Holder: "quarantine", RequestId: "q-1"},
-			Quarantine: &ateapi.ActorQuarantine{RequestId: "q-1", ActivationId: activation},
-		}
-	}); err != nil {
-		t.Fatalf("PlaceActorHold: %v", err)
-	}
-	if got := f.get().GetStatus(); got.GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING || got.GetActivationId() != activation {
-		t.Fatalf("status = %v, want RUNNING at %s", got, activation)
-	}
-	if _, code := minter.mint(activation); code != codes.FailedPrecondition {
-		t.Fatalf("mint for a quarantined Actor: code %v, want FailedPrecondition", code)
-	}
-}
-
 // A failed checkpoint falls back to terminating the same activation. A failed
 // terminate leaves the fallback pending, and a retry finishes it.
 func TestActorQuarantine_RetryAfterFailedSuspend(t *testing.T) {

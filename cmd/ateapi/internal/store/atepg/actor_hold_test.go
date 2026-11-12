@@ -16,11 +16,14 @@ package atepg
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
+	"google.golang.org/protobuf/proto"
 )
 
 // A hold that outlived its receipt still has one after the release, so a
@@ -49,6 +52,25 @@ func TestReleaseActorHold_KeepsHoldReceipt(t *testing.T) {
 	}
 	if n, err := s.cleanupExpiredLifecycleReceipts(ctx); err != nil || n != 1 {
 		t.Fatalf("cleanupExpiredLifecycleReceipts = %d, %v, want 1", n, err)
+	}
+
+	// Expiry must not let another operation claim the active hold's key.
+	held, err := s.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := s.GetActorHold(ctx, actorRef, "user:security")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(held), nil, func(*ateapi.Actor) *ateapi.LifecycleReceipt {
+		return &ateapi.LifecycleReceipt{RequestId: "hold-1", Operation: ateapi.LifecycleOperation_LIFECYCLE_OPERATION_SUSPEND}
+	}, true); !errors.Is(err, store.ErrAlreadyExists) {
+		t.Fatalf("reused active hold key = %v, want ErrAlreadyExists", err)
+	}
+	after, err := s.GetActorLifecycleReceipt(ctx, actorRef, "hold-1")
+	if err != nil || !proto.Equal(original, after) {
+		t.Fatalf("hold receipt changed: %v, %v", after, err)
 	}
 
 	if _, _, err := s.ReleaseActorHold(ctx, actorRef, "user:security", "hold-1", allow, func(*ateapi.Actor, *ateapi.ActorHold) *ateapi.LifecycleReceipt {

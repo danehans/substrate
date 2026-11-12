@@ -29,7 +29,22 @@ import (
 )
 
 func (p *Persistence) GetActorLifecycleReceipt(ctx context.Context, actorRef resources.ActorRef, requestID string) (*ateapi.LifecycleReceipt, error) {
-	return getLifecycleReceipt(ctx, p.pool, actorRef, requestID, time.Now(), false)
+	receipt, err := getLifecycleReceipt(ctx, p.pool, actorRef, requestID, time.Now(), false)
+	if !errors.Is(err, store.ErrNotFound) {
+		return receipt, err
+	}
+	// Active holds retain their request IDs beyond ordinary receipt expiry.
+	var b []byte
+	err = p.pool.QueryRow(ctx, `SELECT receipt FROM actor_holds
+  WHERE atespace = $1 AND actor_name = $2 AND request_id = $3`,
+		actorRef.Atespace, actorRef.Name, requestID).Scan(&b)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading active hold receipt: %w", err)
+	}
+	return unmarshalHoldReceipt(b, actorRef)
 }
 
 func (p *Persistence) UpdateActorWithReceipt(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, receipt func(*ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.LifecycleReceipt, error) {
@@ -112,6 +127,17 @@ func getLifecycleReceipt(ctx context.Context, q querier, actorRef resources.Acto
 // insertLifecycleReceipt stores r, replacing an expired receipt under the
 // same key. An unexpired one fails the insert with ErrAlreadyExists.
 func insertLifecycleReceipt(ctx context.Context, tx pgx.Tx, actorRef resources.ActorRef, r *ateapi.LifecycleReceipt, now time.Time) error {
+	// Callers hold the actor row lock, which also serializes hold changes.
+	var held bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM actor_holds
+  WHERE atespace = $1 AND actor_name = $2 AND request_id = $3)`,
+		actorRef.Atespace, actorRef.Name, r.GetRequestId()).Scan(&held); err != nil {
+		return fmt.Errorf("checking active hold request: %w", err)
+	}
+	if held {
+		return store.ErrAlreadyExists
+	}
+
 	b, err := proto.Marshal(r)
 	if err != nil {
 		return fmt.Errorf("marshaling lifecycle receipt: %w", err)

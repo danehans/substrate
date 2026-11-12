@@ -175,7 +175,7 @@ func (w *ActorWorkflow) suspendActor(ctx context.Context, actorRef resources.Act
 	// them here, as crash.go does for the crash counter. The fidelity label is
 	// the one requested.
 	finalAttrs = lifecycleOpAttrs(actor, "", wireFidelity)
-	finalized, receipt, err := w.ensureSuspendedFinalized(leaseCtx, actorRef, mode, ateletState, call)
+	finalized, receipt, err := w.ensureSuspendedFinalized(leaseCtx, actor, mode, ateletState, call)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -356,7 +356,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 		if ctx.Err() == nil && status.Code(err) == codes.Aborted {
 			return wireFidelity, nil, apierror.Aborted("while calling atelet Checkpoint: %w", err)
 		}
-		return wireFidelity, nil, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
+		return wireFidelity, nil, handleAteletError(ctx, w.store, actor, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
 	return wireFidelity, resp.GetState(), nil
 }
@@ -407,8 +407,9 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // FailedPrecondition.
 // ateletState is the state atelet returned from Checkpoint, applied in the
 // same update. A state that conflicts with the record crashes the actor.
-func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, ateletState *ateletpb.ActorSnapshotState, call *lifecycleCall) (_ *ateapi.Actor, _ *ateapi.LifecycleReceipt, err error) {
+func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, expected *ateapi.Actor, mode suspendMode, ateletState *ateletpb.ActorSnapshotState, call *lifecycleCall) (_ *ateapi.Actor, _ *ateapi.LifecycleReceipt, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
+	actorRef := resources.ActorRefFromActor(expected)
 	defer func() { err = done(err) }()
 
 	// The step is a chain of store round-trips with no spans of its own, so
@@ -432,23 +433,26 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := checkActorExecution(actorRef, expected, latestActor); err != nil {
+		return nil, nil, err
+	}
 	if state := latestActor.GetStatus().GetState(); state != ateapi.ActorState_ACTOR_STATE_SUSPENDING {
 		return nil, nil, apierror.FailedPrecondition("FinalizeSuspended prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, state, ateapi.ActorState_ACTOR_STATE_SUSPENDING)
 	}
 	if mode == suspendAsync {
 		// A local snapshot on an unknown node can never be found by the scheduler.
 		if latestActor.GetStatus().GetAssignedNode() == "" {
-			return nil, nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
+			return nil, nil, crashActorAndFail(ctx, w.store, latestActor, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
 		}
 		if snapshotAtLatestGeneration(latestActor.GetStatus()) == nil {
-			return nil, nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+			return nil, nil, crashActorAndFail(ctx, w.store, latestActor, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
 		}
 	}
 	// Both modes mark the durable copy PENDING up front. Without it a sync
 	// suspend has nothing to mark COMPLETED, and atelet's background upload of
 	// an async suspend's snapshot could never be recorded.
 	if snapshotAtLatestGeneration(latestActor.GetStatus()).GetDurableSnapshot() == nil {
-		return nil, nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageDurableSnapshotMissing)
+		return nil, nil, crashActorAndFail(ctx, w.store, latestActor, ateattr.OperationSuspend, crashMessageDurableSnapshotMissing)
 	}
 
 	// A state that conflicts with the record crashes the actor. Atelet has
@@ -458,7 +462,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		slog.WarnContext(ctx, "Snapshot state atelet returned conflicts with the record",
 			slog.Any("actor", actorRef),
 			slog.Any("err", err))
-		return nil, nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
+		return nil, nil, crashActorAndFail(ctx, w.store, latestActor, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
 	}
 
 	// 1. Free the worker and finalize the actor in one write: record its new

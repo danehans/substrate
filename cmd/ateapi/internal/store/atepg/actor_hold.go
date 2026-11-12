@@ -70,6 +70,9 @@ func (p *Persistence) PlaceActorHold(ctx context.Context, actorRef resources.Act
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshaling hold receipt: %w", err)
 	}
+	if err := insertLifecycleReceipt(ctx, tx, actorRef, r, now); err != nil {
+		return nil, nil, err
+	}
 	tag, err := tx.Exec(ctx, `
 		INSERT INTO actor_holds (atespace, actor_name, holder, request_id, receipt)
 		VALUES ($1, $2, $3, $4, $5)
@@ -95,9 +98,7 @@ func (p *Persistence) PlaceActorHold(ctx context.Context, actorRef resources.Act
 	if stored, err = writeActorRow(ctx, tx, actorRef, stored, nil, false); err != nil {
 		return nil, nil, err
 	}
-	if err := insertLifecycleReceipt(ctx, tx, actorRef, r, now); err != nil {
-		return nil, nil, err
-	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, nil, fmt.Errorf("committing transaction: %w", err)
 	}

@@ -18,13 +18,17 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/resources"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 )
 
 // countingStore counts the Actor writes a workflow makes.
@@ -123,6 +127,7 @@ func TestResumeActor_Activation(t *testing.T) {
 
 			counting := &countingStore{Interface: persistence}
 			w := newSchedulingWorkflow(t, ctx, counting)
+			w.workflowDeadline = time.Minute
 			fake := &capturingAtelet{}
 			w.dialer = newNodeAteletDialer(t, fake)
 
@@ -169,5 +174,41 @@ func TestClearWorkerAssignment(t *testing.T) {
 	}
 	if status.GetAssignedNode() != "node-1" {
 		t.Errorf("assigned_node = %q, want it kept", status.GetAssignedNode())
+	}
+}
+
+func TestLifecycleCompletion_RejectsLaterExecution(t *testing.T) {
+	for _, change := range []string{"activation", "uid"} {
+		t.Run(change, func(t *testing.T) {
+			st := newTestPersistence(t)
+			ctx := t.Context()
+			ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			seedActor(t, ctx, st, ref)
+			actor := loadCrashActor(t, st, ref)
+			actor, err := st.UpdateActor(ctx, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+				a.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDING
+				a.Status.ActivationId = "01JDQ5W2R3V6Z8B4N7K9M1P0XA"
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stale := proto.CloneOf(actor)
+			if change == "uid" {
+				stale.Metadata.Uid = "earlier-uid"
+			} else {
+				stale.Status.ActivationId = "01JDQ5W2R3V6Z8B4N7K9M1P0XB"
+			}
+			w, _ := newFinalizeWorkflow(st)
+			if _, _, err := w.ensureSuspendedFinalized(ctx, stale, suspendSync, nil, nil); apierror.Code(err) != codes.Aborted {
+				t.Fatalf("stale suspend completion = %v, want Aborted", err)
+			}
+			if err := crashActorIfCurrent(ctx, st, stale, "suspend", "stale failure"); apierror.Code(err) != codes.Aborted {
+				t.Fatalf("stale crash = %v, want Aborted", err)
+			}
+			if after := loadCrashActor(t, st, ref); !proto.Equal(actor, after) {
+				t.Fatalf("later execution changed: %v", after)
+			}
+		})
 	}
 }

@@ -382,3 +382,53 @@ func appliedMigrationVersions(t *testing.T, pool *pgxpool.Pool) []int64 {
 	}
 	return versions
 }
+func TestLifecycleMigrations_UpgradePrefixes(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+	const schema = "lifecycle-upgrade"
+	if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS "lifecycle-upgrade" CASCADE; CREATE SCHEMA "lifecycle-upgrade"`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP SCHEMA "lifecycle-upgrade" CASCADE`) })
+	migrationPool, err := pgxpool.New(ctx, containerDSN+"&search_path="+schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrationPool.Close()
+	files, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := openMigrationProvider(ctx, migrationPool, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close() //nolint:errcheck
+	for version := int64(1); version <= 3; version++ {
+		if _, err := provider.UpTo(ctx, version); err != nil {
+			t.Fatal(err)
+		}
+		// The preceding binary's explicit-column writes remain valid at every
+		// prefix, including when migration 2 commits before migration 3.
+		if _, err := migrationPool.Exec(ctx, `INSERT INTO atespaces (name, uid, version, proto)
+   VALUES ('team-a', 'space-uid', 1, ''::bytea) ON CONFLICT DO NOTHING`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := migrationPool.Exec(ctx, `INSERT INTO actors (atespace, name, uid, version, proto)
+   VALUES ('team-a', 'old-actor', 'actor-uid', 1, ''::bytea)
+   ON CONFLICT (atespace, name) DO UPDATE SET version = actors.version + 1`); err != nil {
+			t.Fatalf("old writer at prefix %d: %v", version, err)
+		}
+		var got int64
+		if err := migrationPool.QueryRow(ctx, `SELECT version FROM actors WHERE atespace = 'team-a' AND name = 'old-actor'`).Scan(&got); err != nil || got != version {
+			t.Fatalf("old reader at prefix %d = %d, %v", version, got, err)
+		}
+	}
+	// An already-migrated downstream schema is a no-op on restart.
+	if err := applyMigrations(ctx, migrationPool); err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff([]int64{1, 2, 3}, appliedMigrationVersions(t, migrationPool)); diff != "" {
+		t.Fatal(diff)
+	}
+}

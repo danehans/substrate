@@ -221,7 +221,7 @@ func (s *ServiceImpl) BindActorToWorkerWithReceipt(ctx context.Context, workerNa
 	return s.store.BindActorToWorkerWithReceipt(ctx, workerName, assignment, admit, actorRef, precondition, s.validatedActorMutation(ctx, mutate), receipt, create)
 }
 
-func (s *ServiceImpl) UpdateActorAndReleaseWithReceipt(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, receipt func(*ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.LifecycleReceipt, error) {
+func (s *ServiceImpl) UpdateActorAndReleaseWithReceipt(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error, receipt func(*ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.Worker, *ateapi.LifecycleReceipt, error) {
 	return s.store.UpdateActorAndReleaseWithReceipt(ctx, actorRef, precondition, s.validatedActorMutation(ctx, mutate), receipt, create)
 }
 

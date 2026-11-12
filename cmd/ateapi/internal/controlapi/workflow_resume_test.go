@@ -168,7 +168,7 @@ func TestFinalizeRunning_RefusesOtherActivation(t *testing.T) {
 	w := &ActorWorkflow{store: persistence}
 	ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
-	_, _, err := w.finalizeRunning(ctx, ref, "01JDQ5W2R3V6Z8B4N7K9M1P0XB", 1, nil)
+	_, _, err := w.finalizeRunning(ctx, ref, loadCrashActor(t, persistence, ref).GetMetadata().GetUid(), "01JDQ5W2R3V6Z8B4N7K9M1P0XB", 1, nil)
 	if got := apierror.Code(err); got != codes.Aborted {
 		t.Fatalf("finalizeRunning() = %v (err %v), want Aborted", got, err)
 	}
@@ -194,7 +194,7 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 	seedFinalizeActor(t, ctx, persistence, 1, []string{"10.0.0.1"})
 	w := &ActorWorkflow{store: persistence}
 
-	got, _, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, testActivationID, 1, nil)
+	got, _, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, loadCrashActor(t, persistence, resources.ActorRef{Atespace: "team-a", Name: "id1"}).GetMetadata().GetUid(), testActivationID, 1, nil)
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestFinalizeRunning_StampsReportedEpochAndIPs(t *testing.T) {
 	seedFinalizeActor(t, ctx, persistence, 2, []string{"10.0.0.2"})
 	w := &ActorWorkflow{store: persistence}
 
-	got, _, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, testActivationID, 2, nil)
+	got, _, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, loadCrashActor(t, persistence, resources.ActorRef{Atespace: "team-a", Name: "id1"}).GetMetadata().GetUid(), testActivationID, 2, nil)
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestFinalizeRunning_ReplacedWorkerProcess(t *testing.T) {
 			}
 			w := &ActorWorkflow{store: persistence}
 
-			_, _, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, testActivationID, tc.reported, nil)
+			_, _, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, loadCrashActor(t, persistence, resources.ActorRef{Atespace: "team-a", Name: "id1"}).GetMetadata().GetUid(), testActivationID, tc.reported, nil)
 			if got := apierror.Code(err); got != tc.want {
 				t.Fatalf("finalizeRunning() = %v (err %v), want %v", got, err, tc.want)
 			}
@@ -287,7 +287,7 @@ func TestFinalizeRunning_UnrecordableUploadStillRuns(t *testing.T) {
 	})
 	w := &ActorWorkflow{store: persistence}
 
-	got, _, err := w.finalizeRunning(ctx, ref, testActivationID, 1, nil)
+	got, _, err := w.finalizeRunning(ctx, ref, loadCrashActor(t, persistence, ref).GetMetadata().GetUid(), testActivationID, 1, nil)
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
@@ -3523,5 +3523,28 @@ func TestAssignWorkerAttempt_RefusesChangedOverhead(t *testing.T) {
 	w.store.(*contentionStore).workers[locked.GetMetadata().GetName()] = cached
 	if _, _, err := w.assignWorkerAttempt(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl, nil); err != nil {
 		t.Fatalf("assignWorkerAttempt() with an unchanged overhead = %v", err)
+	}
+}
+
+func TestAssignWorkerAttempt_ConflictCannotRetargetReplacement(t *testing.T) {
+	ctx := t.Context()
+	st := newTestPersistence(t)
+	original, wc := seedAssignFixture(t, ctx, st)
+	ref := resources.ActorRefFromActor(original)
+	if _, err := st.DeleteActor(ctx, ref, store.DeletePreconditions{}); err != nil {
+		t.Fatal(err)
+	}
+	replacement := storetest.MustCreateActor(t, ctx, st, &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Atespace: ref.Atespace, Name: ref.Name},
+		Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+	})
+	// The bind saw a version conflict; the refresh now sees the replacement.
+	w := &ActorWorkflow{store: &bindErrorStore{Interface: st, err: store.ErrVersionConflict}, workerCache: wc, scheduler: scheduling.New(wc)}
+	if _, _, err := w.assignWorkerAttempt(ctx, ref, original, &ateapi.ActorTemplate{}, nil); apierror.Code(err) != codes.Aborted {
+		t.Fatalf("refresh after replacement = %v, want Aborted", err)
+	}
+	got, err := st.GetActor(ctx, ref)
+	if err != nil || !proto.Equal(replacement, got) {
+		t.Fatalf("replacement changed: %v, %v", got, err)
 	}
 }

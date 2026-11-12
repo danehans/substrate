@@ -263,8 +263,34 @@ func quarantineSuspendPending(r *ateapi.LifecycleReceipt) bool {
 // suspend replayed its receipt or found nothing to suspend.
 func (s *RPCService) finishQuarantineSuspend(ctx context.Context, actorRef resources.ActorRef, r *ateapi.LifecycleReceipt) (*ateapi.Actor, *ateapi.LifecycleReceipt, error) {
 	cond := lifecycleConditions{expectedUID: r.GetActorUid(), expectedActivation: r.GetActivationId(), requestID: r.GetSuspendRequestId()}
-	final := proto.CloneOf(r)
 	actor, suspend, err := s.actorWorkflow.suspendActor(ctx, actorRef, suspendAsync, cond, true)
+	// The suspend releases its lease. Reacquire it and read the receipt again
+	// before recording completion, so a duplicate cannot erase termination.
+	leaseCtx, lease, leaseErr := s.actorWorkflow.acquireActorLease(ctx, actorRef)
+	if leaseErr != nil {
+		return nil, nil, leaseErr
+	}
+	defer lease.Close()
+	ctx = leaseCtx
+	stored, lookupErr := s.storedQuarantine(ctx, actorRef, r)
+	if lookupErr != nil {
+		return nil, nil, lookupErr
+	}
+	if stored == nil {
+		return nil, r, nil
+	}
+	if !quarantineSuspendPending(stored) {
+		return nil, stored, nil
+	}
+	current, getErr := s.impl.GetActor(ctx, actorRef)
+	if errors.Is(getErr, store.ErrNotFound) || getErr == nil &&
+		(current.GetMetadata().GetUid() != r.GetActorUid() || current.GetStatus().GetQuarantine().GetRequestId() != r.GetRequestId()) {
+		return nil, stored, nil
+	}
+	if getErr != nil {
+		return nil, nil, getErr
+	}
+	final := proto.CloneOf(stored)
 	// A replayed receipt of a suspend that never finished is in SUSPENDING.
 	if err == nil && suspend.GetTransitioned() && suspend.GetActivationId() == r.GetActivationId() &&
 		suspend.GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED {
@@ -375,7 +401,7 @@ func (s *RPCService) finishQuarantineTerminate(ctx context.Context, actorRef res
 		return nil, nil, err
 	}
 	// Free the worker and mark the actor SUSPENDED in one write.
-	stopped, err := w.store.UpdateActorAndRelease(leaseCtx, actorRef, store.PreconditionFrom(actor), func(current *ateapi.Actor) error {
+	stopped, released, err := w.store.UpdateActorAndRelease(leaseCtx, actorRef, store.PreconditionFrom(actor), func(current *ateapi.Actor) error {
 		if current.GetMetadata().GetUid() != r.GetActorUid() || current.GetStatus().GetActivationId() != r.GetActivationId() ||
 			current.GetStatus().GetQuarantine().GetRequestId() != r.GetRequestId() {
 			return apierror.FailedPrecondition("Actor %s no longer holds the quarantined activation", actorRef)
@@ -389,6 +415,9 @@ func (s *RPCService) finishQuarantineTerminate(ctx context.Context, actorRef res
 	})
 	if err != nil {
 		return nil, nil, actorWriteError(actorRef, err)
+	}
+	if w.workerCache != nil && released != nil {
+		w.workerCache.Observe(released)
 	}
 	w.releaseDroppedSnapshots(leaseCtx, actor, stopped)
 	final := proto.CloneOf(r)

@@ -181,7 +181,7 @@ func (w *ActorWorkflow) terminateAtelet(ctx context.Context, actorRef resources.
 			slog.InfoContext(ctx, "workload already terminated on atelet", slog.Any("actor", actorRef))
 			return nil
 		}
-		return handleAteletError(ctx, w.store, actorRef, opName, "Terminate", true, err)
+		return handleAteletError(ctx, w.store, actor, opName, "Terminate", true, err)
 	}
 
 	return nil

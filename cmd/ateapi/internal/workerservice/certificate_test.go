@@ -375,3 +375,22 @@ func TestMintWorkerActorCertificate_Errors(t *testing.T) {
 		})
 	}
 }
+
+func TestMintWorkerActorCertificate_Quarantined(t *testing.T) {
+	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
+	server := New(st, &fakeControl{}, testAteletSPIFFEID, newTestCAPool(t), "", nil)
+	csr, _ := generateTestCSR(t)
+	ctx := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-1"))
+	req := &ateapi.MintWorkerActorCertificateRequest{
+		Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "my-actor"},
+		ActorUid: actor.GetMetadata().GetUid(), Worker: &ateapi.ObjectRef{Name: "worker-1"},
+		CertificateSigningRequest: csr,
+	}
+	if _, err := server.MintWorkerActorCertificate(ctx, req); err != nil {
+		t.Fatalf("mint before quarantine: %v", err)
+	}
+	actor.Status.Quarantine = &ateapi.ActorQuarantine{RequestId: "quarantine-1"}
+	if _, err := server.MintWorkerActorCertificate(ctx, req); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("mint after quarantine = %v, want FailedPrecondition", err)
+	}
+}

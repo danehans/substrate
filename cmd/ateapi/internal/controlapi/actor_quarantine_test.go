@@ -20,8 +20,11 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/actorevent"
 	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/resources"
+	"google.golang.org/protobuf/proto"
 )
 
 // The audit record of a quarantine names the caller, reason, incident,
@@ -157,4 +160,52 @@ func TestLogQuarantineChanged(t *testing.T) {
 			t.Errorf("attributes (-want +got):\n%s", diff)
 		}
 	})
+}
+
+// A duplicate read the initial receipt before another call finished fallback
+// termination. Its delayed suspend completion must preserve that evidence.
+func TestQuarantineDelayedSuspendKeepsTerminationReceipt(t *testing.T) {
+	st := newTestPersistence(t)
+	w := newTestActorWorkflow(t, st, "team-a", "template")
+	ctx := t.Context()
+	ref := resources.ActorRef{Atespace: "team-a", Name: "actor"}
+	seedWorkflowActor(t, ctx, st, ref, "team-a", "template", ateapi.ActorState_ACTOR_STATE_RUNNING, func(a *ateapi.Actor) {
+		a.Status.ActivationId = testActivationID
+	})
+	service := &RPCService{impl: &ServiceImpl{store: st}, actorWorkflow: w}
+	actor, initial, err := st.PlaceActorHold(ctx, ref, func(*ateapi.Actor) error { return nil }, func(a *ateapi.Actor) *ateapi.LifecycleReceipt {
+		return &ateapi.LifecycleReceipt{
+			RequestId: "quarantine-1", SuspendRequestId: "quarantine-1/suspend",
+			ActorUid: a.GetMetadata().GetUid(), ActivationId: testActivationID,
+			Operation:  ateapi.LifecycleOperation_LIFECYCLE_OPERATION_QUARANTINE,
+			State:      ateapi.ActorState_ACTOR_STATE_RUNNING,
+			Hold:       &ateapi.ActorHold{Holder: store.QuarantineHolder, RequestId: "quarantine-1"},
+			Quarantine: &ateapi.ActorQuarantine{RequestId: "quarantine-1", ActivationId: testActivationID},
+			Steps:      []ateapi.QuarantineStep{ateapi.QuarantineStep_QUARANTINE_STEP_HOLD, ateapi.QuarantineStep_QUARANTINE_STEP_MARKED},
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.UpdateActorAndRelease(ctx, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+		a.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+		clearWorkerAssignment(a.Status)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	terminal := proto.CloneOf(initial)
+	terminal.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+	terminal.Steps = append(terminal.Steps, ateapi.QuarantineStep_QUARANTINE_STEP_TERMINATED)
+	if err := st.ReplaceActorHoldReceipt(ctx, ref, terminal); err != nil {
+		t.Fatal(err)
+	}
+	_, got, err := service.finishQuarantineSuspend(ctx, ref, initial)
+	if err != nil || !proto.Equal(terminal, got) {
+		t.Fatalf("delayed completion = %v, %v; want %v", got, err, terminal)
+	}
+	stored, err := st.GetActorLifecycleReceipt(ctx, ref, initial.GetRequestId())
+	if err != nil || !proto.Equal(terminal, stored) {
+		t.Fatalf("stored receipt = %v, %v; want %v", stored, err, terminal)
+	}
 }

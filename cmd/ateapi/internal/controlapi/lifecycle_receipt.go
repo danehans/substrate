@@ -180,3 +180,13 @@ func (c *lifecycleCall) write(plain func() (*ateapi.Actor, error), withReceipt f
 	c.stored = true
 	return stored, r, nil
 }
+
+// checkActorExecution rejects an observation from another actor or activation,
+// including a cleared activation. Unlike request conditions, empty is exact.
+func checkActorExecution(ref resources.ActorRef, expected, current *ateapi.Actor) error {
+	if expected.GetMetadata().GetUid() != current.GetMetadata().GetUid() ||
+		expected.GetStatus().GetActivationId() != current.GetStatus().GetActivationId() {
+		return apierror.Aborted("actor %s changed execution", ref)
+	}
+	return nil
+}

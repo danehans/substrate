@@ -16,7 +16,9 @@ package functionaltest
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -26,7 +28,9 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 )
 
@@ -456,4 +460,87 @@ func TestLifecycleReceipt_ExpectedActivationOnlyForActors(t *testing.T) {
 		Options:       &ateapi.DeleteOptions{ExpectedActivation: "01JDQ5W2R3V6Z8B4N7K9M1P0XA"},
 	})
 	wantCode(t, "DeleteActorTemplate with expected_activation", err, codes.InvalidArgument)
+}
+
+func TestLifecycleReceipt_ConcurrentResumes(t *testing.T) {
+	for _, shared := range []bool{true, false} {
+		t.Run(fmt.Sprintf("shared-request-%v", shared), func(t *testing.T) {
+			f := newReceiptFixture(t, "ns-concurrent-resume")
+			const n = 8
+			start := make(chan struct{})
+			results := make(chan error, n)
+			requests := make([]*ateapi.ResumeActorRequest, n)
+			for i := range n {
+				id := "concurrent-resume"
+				if !shared {
+					id = fmt.Sprintf("resume-%d", i)
+				}
+				requests[i] = &ateapi.ResumeActorRequest{Actor: f.ref, RequestId: id, ExpectedUid: f.get().GetMetadata().GetUid()}
+				go func(req *ateapi.ResumeActorRequest) {
+					<-start
+					_, err := f.tc.client.ResumeActor(f.ctx, req)
+					results <- err
+				}(requests[i])
+			}
+			close(start)
+			for range n {
+				if err := <-results; err != nil && status.Code(err) != codes.Aborted {
+					t.Fatalf("concurrent resume: %v", err)
+				}
+			}
+			// Any lease contender retries with exactly its original request ID.
+			var activation string
+			for _, req := range requests {
+				resp, err := f.tc.client.ResumeActor(f.ctx, req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if activation == "" {
+					activation = resp.GetReceipt().GetActivationId()
+				}
+				if resp.GetReceipt().GetActivationId() != activation || activation == "" {
+					t.Fatalf("concurrent resumes produced different activations: %v", resp)
+				}
+			}
+			actor := f.get()
+			assignments, err := f.tc.persistence.ListWorkerAssignments(f.ctx, actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(), store.ListOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(assignments.Items) != 1 {
+				t.Fatalf("assignments = %d, want 1", len(assignments.Items))
+			}
+			if sent := sentActivation(t, f.tc); sent != activation {
+				t.Fatalf("sent %q, receipt %q", sent, activation)
+			}
+		})
+	}
+}
+
+func TestLifecycleReceipt_RebuiltServiceReplays(t *testing.T) {
+	f := newReceiptFixture(t, "ns-rebuilt-receipts")
+	resume := &ateapi.ResumeActorRequest{Actor: f.ref, RequestId: "before-restart-resume"}
+	resumed, err := f.tc.client.ResumeActor(f.ctx, resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suspend := &ateapi.SuspendActorRequest{Actor: f.ref, RequestId: "before-restart-suspend", ExpectedActivation: resumed.GetReceipt().GetActivationId()}
+	suspended, err := f.suspend(proto.CloneOf(suspend))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.resume()
+	before := f.get()
+	// No in-memory workflow progress, worker cache, or atelet dialer survives.
+	service := controlapi.NewRPCService(f.tc.persistence, nil, nil, nil, nil, nil, "", time.Minute, nil, nil, "", nil, "")
+	ctx := preview.ContextWithOptIn(f.ctx)
+	gotResume, err := service.ResumeActor(ctx, resume)
+	if err != nil || gotResume.GetActor() != nil || !proto.Equal(resumed.GetReceipt(), gotResume.GetReceipt()) {
+		t.Fatalf("resume after rebuilding service: %v, %v", gotResume, err)
+	}
+	gotSuspend, err := service.SuspendActor(ctx, suspend)
+	if err != nil || gotSuspend.GetActor() != nil || !proto.Equal(suspended.GetReceipt(), gotSuspend.GetReceipt()) {
+		t.Fatalf("suspend after rebuilding service: %v, %v", gotSuspend, err)
+	}
+	f.wantUnchanged(before)
 }
