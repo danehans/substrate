@@ -276,6 +276,17 @@ func TestDanehansDraft(t *testing.T) {
 				t.Fatalf("dry run called release API: %s", calls)
 			}
 			if mode == "valid" {
+				sourceURL := "https://github.com/danehans/substrate/blob/" + strings.TrimSpace(string(source)) + "/"
+				for _, path := range []string{
+					"docs/reference/api-guide.md#conditional-suspend-and-resume",
+					"docs/guides/actor-quarantine.md",
+					"cmd/dataplane/envoy/dynamic-modules/egress-policy/README.md#tunnel-revocation",
+					"hack/release/danehans/agentgateway.env",
+				} {
+					if !strings.Contains(string(out), "]("+sourceURL+path+")") {
+						t.Errorf("notes missing source link for %q", path)
+					}
+				}
 				for _, want := range []string{"substrate-atelet", "envoy-dataplane", "v1.0.1", "Dry run: no release created."} {
 					if !strings.Contains(string(out), want) {
 						t.Errorf("notes missing %q", want)

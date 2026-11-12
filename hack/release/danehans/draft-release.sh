@@ -193,9 +193,10 @@ for os in linux darwin; do
 done
 
 # The patch list from PATCHES.md, from its first section on, with headings
-# demoted and its links to files beside it made absolute at the source revision.
+# demoted and local file links made absolute at the source revision.
 patches="$(awk '/^## Functional patches/ {f = 1} f' "${HERE}/PATCHES.md" |
   sed -e 's/^## /### /' \
+    -e "s#](\.\./\.\./\.\./#](https://github.com/${FORK_REPOSITORY}/blob/${source_sha}/#g" \
     -e "s#](\\([a-z.]*\\.env\\))#](https://github.com/${FORK_REPOSITORY}/blob/${source_sha}/hack/release/danehans/\\1)#g")"
 if [[ -z "${patches}" ]]; then
   echo "error: ${HERE}/PATCHES.md has no patch list" >&2
