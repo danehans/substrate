@@ -63,6 +63,10 @@ jobs:
           ~/go/pkg/mod
         key: unit-go-${{ runner.os }}-${{ github.sha }}
         restore-keys: unit-go-${{ runner.os }}-
+    # The release-asset URL used by setup-envtest intermittently returns 504.
+    # Sideload the same archive through the GitHub API after checking its hash.
+    - name: Preload envtest
+      run: .github/scripts/preload-envtest.sh
     # we only test on amd64, make sure everything still builds for arm64
     - name: build for arm64
       run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...

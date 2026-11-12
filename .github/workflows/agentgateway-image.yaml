@@ -14,7 +14,13 @@
 
 name: Build agentgateway image
 
+# In danehans/substrate, a push to a danehans/* branch that changes
+# hack/release/danehans/agentgateway.env also builds the source it names, so
+# the chart's default gateway is built from a reviewed, committed revision.
 on:
+  push:
+    branches: ['danehans/**']
+    paths: ['hack/release/danehans/agentgateway.env']
   workflow_dispatch:
     inputs:
       repository:
@@ -33,45 +39,116 @@ on:
 
 permissions:
   contents: read
+concurrency:
+  group: agentgateway-image-${{ github.repository }}
+  cancel-in-progress: false
 
 env:
   REGISTRY_IMAGE: ghcr.io/${{ github.repository }}/agentgateway
 
 jobs:
   source:
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'danehans/substrate'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     outputs:
+      repository: ${{ steps.selected.outputs.repository }}
       sha: ${{ steps.source.outputs.sha }}
       short_sha: ${{ steps.source.outputs.short_sha }}
       tag: ${{ steps.source.outputs.tag }}
+      exists: ${{ steps.existing.outputs.exists }}
     steps:
+      - name: Checkout fork release files
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: |
+            go.mod
+            hack/release/danehans/agentgateway.env
+            hack/release/danehans/check-gateway-image.sh
+            hack/release/danehans/check-gateway-tag.sh
+            hack/release/danehans/install-crane.sh
+            hack/release/danehans/registry-tag.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          path: selected
+
+      # A push builds the full revision agentgateway.env names; a manual run
+      # builds its inputs.
+      - name: Select source
+        id: selected
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_REPOSITORY: ${{ inputs.repository }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          if [[ "$EVENT" == push ]]; then
+            # shellcheck source=/dev/null
+            source selected/hack/release/danehans/agentgateway.env
+            if [[ ! "$GATEWAY_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ || ! "$GATEWAY_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::agentgateway.env must name owner/repository and a full commit SHA."
+              exit 1
+            fi
+            repository=$GATEWAY_REPOSITORY
+            ref=$GATEWAY_REVISION
+          else
+            repository=$INPUT_REPOSITORY
+            ref=$INPUT_REF
+          fi
+          {
+            echo "repository=$repository"
+            echo "ref=$ref"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Checkout agentgateway
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ inputs.repository }}
-          ref: ${{ inputs.ref }}
+          repository: ${{ steps.selected.outputs.repository }}
+          ref: ${{ steps.selected.outputs.ref }}
           persist-credentials: false
+          path: gateway
 
       - name: Resolve source revision and image tag
         id: source
         env:
           IMAGE_TAG: ${{ inputs.tag }}
         run: |
-          sha=$(git rev-parse HEAD)
+          sha=$(git -C gateway rev-parse HEAD)
           short_sha=${sha:0:12}
           tag=${IMAGE_TAG:-$short_sha}
-          if [[ ! "$tag" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]]; then
-            echo "::error::Image tag must be 1-128 characters, start with a letter, digit, or underscore, and contain only letters, digits, underscores, periods, or hyphens."
-            exit 1
-          fi
+          selected/hack/release/danehans/check-gateway-tag.sh "$tag"
           {
             echo "sha=$sha"
             echo "short_sha=$short_sha"
             echo "tag=$tag"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: selected/go.mod
+          cache: false
+
+      - name: Install crane
+        run: selected/hack/release/danehans/install-crane.sh
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check existing image tag
+        id: existing
+        env:
+          IMAGE_TAG: ${{ steps.source.outputs.tag }}
+        run: selected/hack/release/danehans/check-gateway-image.sh
+
   build:
     needs: source
+    if: needs.source.outputs.exists != 'true'
     permissions:
       contents: read
       packages: write
@@ -90,7 +167,7 @@ jobs:
       - name: Checkout agentgateway
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ inputs.repository }}
+          repository: ${{ needs.source.outputs.repository }}
           ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
 
@@ -118,7 +195,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.source.outputs.sha }}
-            org.opencontainers.image.url=https://github.com/${{ inputs.repository }}/commit/${{ needs.source.outputs.sha }}
+            org.opencontainers.image.url=https://github.com/${{ needs.source.outputs.repository }}/commit/${{ needs.source.outputs.sha }}
 
       - name: Export digest
         env:
@@ -139,6 +216,7 @@ jobs:
     needs:
       - source
       - build
+    if: needs.source.outputs.exists != 'true'
     runs-on: ubuntu-24.04
     permissions:
       packages: write
@@ -164,7 +242,7 @@ jobs:
         working-directory: ${{ runner.temp }}/digests
         env:
           IMAGE_TAG: ${{ needs.source.outputs.tag }}
-          SOURCE_URL: https://github.com/${{ inputs.repository }}/commit/${{ needs.source.outputs.sha }}
+          SOURCE_URL: https://github.com/${{ needs.source.outputs.repository }}/commit/${{ needs.source.outputs.sha }}
         run: |
           images=()
           for digest in *; do

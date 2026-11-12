@@ -15,6 +15,8 @@
 package release_test
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -146,5 +148,161 @@ func TestDraftReleaseArtifactNotes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDanehansCheckTag(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for tag, ok := range map[string]bool{
+		"v1.0.1-danehans.0":        true,
+		"v1.0.1-danehans.12":       true,
+		"v1.0.1":                   false,
+		"v1.0.0":                   false,
+		"v1.0.1-danehans.01":       false,
+		"v1.0.1-danehans.":         false,
+		"v1.0.1-danehans.0x":       false,
+		"v1X0X1-danehans.0":        false,
+		"v1.0.0-rc1-danehans.0":    false,
+		"v1.0.1-danehans.0,latest": false,
+	} {
+		out, err := exec.Command("bash", filepath.Join(root, "hack/release/danehans/check-tag.sh"), tag).CombinedOutput()
+		if (err == nil) != ok {
+			t.Errorf("check-tag %q: err=%v, want ok=%v\n%s", tag, err, ok, out)
+		}
+	}
+}
+
+func TestDanehansPublishCharts(t *testing.T) {
+	for _, tc := range []struct {
+		name, tag    string
+		dry, wantErr bool
+	}{
+		{name: "valid", tag: "v1.0.1-danehans.0"},
+		{name: "dry", tag: "v1.0.1-danehans.12", dry: true},
+		{name: "upstream", tag: "v1.0.1", wantErr: true},
+		{name: "old base", tag: "v1.0.0-rc1-danehans.0", wantErr: true},
+		{name: "invalid dry", tag: "v1.0.1-danehans.01", dry: true, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, log := releaseEnv(t)
+			t.Setenv("GITHUB_REPOSITORY", "danehans/substrate")
+			t.Setenv("KO_DOCKER_REPO", "ghcr.io/danehans/substrate")
+			t.Setenv("VERSION", tc.tag)
+			args := []string{filepath.Join(root, ".github/scripts/release/publish-charts.sh")}
+			if tc.dry {
+				args = append(args, "--dry-run")
+				t.Setenv("GH_TOKEN", "")
+			}
+			cmd := exec.Command("bash", args...)
+			cmd.Dir = root
+			out, err := cmd.CombinedOutput()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("publish: %v\n%s", err, out)
+			}
+			calls, err := os.ReadFile(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (tc.dry || tc.wantErr) && (strings.Contains(string(calls), "push ") || strings.Contains(string(calls), "registry ")) {
+				t.Fatalf("unexpected writes: %s", calls)
+			}
+			if !tc.wantErr && strings.Count(string(calls), "package ") != 4 {
+				t.Fatalf("incomplete chart set: %s", calls)
+			}
+		})
+	}
+}
+
+func TestDanehansDraft(t *testing.T) {
+	for _, mode := range []string{"valid", "missing-platform", "wrong-revision", "inspect-failure", "bad-checksum", "missing-binary", "missing-atelet", "atelet-render-failure", "bad-chart-image", "registry-failure"} {
+		t.Run(mode, func(t *testing.T) {
+			root, log := releaseEnv(t)
+			realGit, err := exec.LookPath("git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			for _, name := range []string{"git", "helm", "docker", "gh"} {
+				if err := os.Symlink(filepath.Join(root, "hack/release/testdata/danehans-tool.sh"), filepath.Join(bin, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			source, err := exec.Command(realGit, "-C", root, "rev-parse", "HEAD").Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("DRAFT_TEST_SOURCE", strings.TrimSpace(string(source)))
+			t.Setenv("REAL_GIT", realGit)
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("DRAFT_TEST_MODE", mode)
+			t.Setenv("GITHUB_REPOSITORY", "danehans/substrate")
+			t.Setenv("KO_DOCKER_REPO", "ghcr.io/danehans/substrate")
+			assets := t.TempDir()
+			for _, platform := range []string{"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"} {
+				name := "kubectl-ate-" + platform
+				data := []byte(name)
+				if err := os.WriteFile(filepath.Join(assets, name), data, 0600); err != nil {
+					t.Fatal(err)
+				}
+				sum := fmt.Sprintf("%x  %s\n", sha256.Sum256(data), name)
+				if err := os.WriteFile(filepath.Join(assets, name+".sha256"), []byte(sum), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "bad-checksum" {
+				if err := os.WriteFile(filepath.Join(assets, "kubectl-ate-linux-amd64"), []byte("tampered"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "missing-binary" {
+				if err := os.Remove(filepath.Join(assets, "kubectl-ate-darwin-arm64")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("bash", filepath.Join(root, "hack/release/danehans/draft-release.sh"), "--dry-run", "v1.0.1-danehans.0", assets)
+			cmd.Dir = root
+			out, err := cmd.CombinedOutput()
+			if (err == nil) != (mode == "valid") {
+				t.Fatalf("draft: %v\n%s", err, out)
+			}
+			calls, err := os.ReadFile(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(calls), "gh ") {
+				t.Fatalf("dry run called release API: %s", calls)
+			}
+			if mode == "valid" {
+				sourceURL := "https://github.com/danehans/substrate/blob/" + strings.TrimSpace(string(source)) + "/"
+				for _, path := range []string{
+					"docs/reference/api-guide.md#conditional-suspend-and-resume",
+					"docs/guides/actor-quarantine.md",
+					"cmd/dataplane/envoy/dynamic-modules/egress-policy/README.md#tunnel-revocation",
+					"hack/release/danehans/agentgateway.env",
+				} {
+					if !strings.Contains(string(out), "]("+sourceURL+path+")") {
+						t.Errorf("notes missing source link for %q", path)
+					}
+				}
+				for _, want := range []string{"substrate-atelet", "envoy-dataplane", "v1.0.1", "Dry run: no release created."} {
+					if !strings.Contains(string(out), want) {
+						t.Errorf("notes missing %q", want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestGatewayBuildTags(t *testing.T) {
+	root, _ := releaseEnv(t)
+	for tag, ok := range map[string]bool{"8400847e8046": true, "review-test": true, "v1.0.1-danehans.0": false, "v1.0.0-rc1-danehans.5": false, "v1.0.1-danehans.01": false, "bad/tag": false, "": false} {
+		out, err := exec.Command("bash", filepath.Join(root, "hack/release/danehans/check-gateway-tag.sh"), tag).CombinedOutput()
+		if (err == nil) != ok {
+			t.Errorf("tag %q: %v %s", tag, err, out)
+		}
 	}
 }

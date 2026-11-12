@@ -84,6 +84,7 @@ func TestStampVersion(t *testing.T) {
 		wantVersion string
 		wantApp     string
 	}{
+		{"v1.0.1-danehans.0", "1.0.1-danehans.0", "v1.0.1-danehans.0"},
 		{"v1.2.3", "1.2.3", "v1.2.3"},
 		{"v1.2.3-rc.1", "1.2.3-rc.1", "v1.2.3-rc.1"},
 		{"dev", "0.1.0", "0.1.0"},
@@ -109,6 +110,15 @@ func TestLoadEmbeddedCharts(t *testing.T) {
 			}
 			if ch.Name() != r.chart {
 				t.Errorf("chart name = %q, want %q", ch.Name(), r.chart)
+			}
+			if r.chart != "substrate-crds" {
+				image, ok := ch.Values["image"].(map[string]any)
+				if !ok || image["repository"] != "danehans/substrate" {
+					t.Fatalf("embedded chart selects unexpected images: %v", image)
+				}
+			}
+			if len(ch.Metadata.Dependencies) != 0 {
+				t.Fatal("new chart dependencies need release packaging and installer review")
 			}
 			if len(ch.Templates) == 0 {
 				t.Error("chart has no templates")

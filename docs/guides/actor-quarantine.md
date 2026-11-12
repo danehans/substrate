@@ -76,6 +76,32 @@ unqualified target under load. See the [Envoy module contract](../../cmd/datapla
 Closing a tunnel does not establish that idle pooled origin sockets have
 closed or cancel work already accepted by an origin.
 
+## Chart gateway configuration
+
+The chart gateway uses the source and digest recorded in
+[`agentgateway.env`](../../hack/release/danehans/agentgateway.env) and
+`images.agentgateway`. The current historical image predates the reviewed
+v1.0.1 actor-state alignment and is not the final release candidate. It must
+be replaced with a verified build of the reviewed gateway source before
+combined validation and release; see the [gateway integration status](../../hack/release/danehans/PATCHES.md#gateway-integration).
+
+`atenetEgress.agentgateway.upstreamConnections` selects `perExecution` by
+default. This gives each certificate binding its own upstream connections;
+revocation or closing its last tunnel retires that binding's pool. `shared`
+keeps a common pool, so closing an actor's tunnels does not retire every idle
+origin connection. The atenet/Envoy path also does not establish idle origin
+pool retirement. Retained sockets and unauthorized reuse are distinct; neither
+tunnel closure nor a failed reuse attempt proves origin-socket retirement.
+
+For gateway CONNECT refusal and continuing-check events, set
+`atenetEgress.agentgateway.logLevel` to
+`off,agentgateway::substrate::connect_refusal=warn,agentgateway::substrate::connect_revocation=warn`.
+The chart defaults this value to `info`; keep an override in Helm values so
+upgrades preserve it. Refusal events contain `reason_code`, certified actor
+identity and CONNECT authority. The fixed admission reasons include
+`actor-uid-mismatch`, `activation-mismatch`, and `actor-quarantined`, in that
+precedence. These reasons describe CONNECT admission, not every egress error.
+
 ## Caches and lifecycle limits
 
 atenet caches egress policies for ten seconds; atunnel caches DNS policy for

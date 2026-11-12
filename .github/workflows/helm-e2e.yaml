@@ -64,7 +64,7 @@ jobs:
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Label nodes with the installed version
-      run: kubectl label nodes --all ate.dev/substrate-version=${VERSION}
+      run: kubectl label nodes --all "ate.dev/substrate-version=${VERSION}"
     - name: Create install namespace
       run: kubectl create namespace ate-system
     - name: Install observability fixtures
@@ -73,12 +73,12 @@ jobs:
         kubectl apply -f manifests/ate-install/kind/prometheus.yaml
     - name: Build chart images
       run: |
-        # Pushed under the image's real path (kagent-dev/substrate/<component>):
+        # Pushed under the image's real path (danehans/substrate/<component>):
         # the chart composes {registry}/{repository}/{component}, so the local
         # registry serves each image where the default repository expects it --
         # the same path-preserving rule a production mirror follows.
         for component in ateapi ate-idp-server atecontroller atelet podcertcontroller atenet objectstore-plugin credential-provider/kubernetes-secrets; do
-          KO_DOCKER_REPO="localhost:5001/kagent-dev/substrate/${component##*/}" \
+          KO_DOCKER_REPO="localhost:5001/danehans/substrate/${component##*/}" \
             ./hack/run-tool.sh ko build --bare --tags helm-e2e \
               --platform linux/amd64 "./cmd/${component}"
         done

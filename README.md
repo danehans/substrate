@@ -1,3 +1,15 @@
+> [!IMPORTANT]
+> **danehans/substrate is an experimental, unqualified, development-only downstream of
+> [kagent-dev/substrate](https://github.com/kagent-dev/substrate).** GitHub
+> lists it as a fork of `agent-substrate/substrate` because all three
+> repositories share one fork network. Its `danehans/*` release branches are
+> based on kagent-dev/substrate: this branch starts at
+> [`v1.0.1`](https://github.com/kagent-dev/substrate/releases/tag/v1.0.1)
+> (`7ce6f439239c568285f6d897aaa4afd47752c775`). See
+> [`hack/release/danehans/fork.env`](hack/release/danehans/fork.env) for the base
+> and [`PATCHES.md`](hack/release/danehans/PATCHES.md) for every change. This is
+> not an upstream release.
+
 <div align="center">
 
 <picture>

@@ -17,14 +17,26 @@
 # Publish the tagged checkout's charts beside its release images.
 set -o errexit -o nounset -o pipefail
 
-: "${VERSION:?}" "${KO_DOCKER_REPO:?}" "${GITHUB_ACTOR:?}" "${GH_TOKEN:?}"
+dry_run=false
+if [[ "${1:-}" == --dry-run ]]; then
+  dry_run=true
+  shift
+fi
+[[ $# -eq 0 ]] || { echo "usage: $0 [--dry-run]" >&2; exit 2; }
+: "${VERSION:?}" "${KO_DOCKER_REPO:?}"
 if [[ ! "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
   echo "error: ${VERSION} is not a release tag" >&2
   exit 1
 fi
 
 ROOT="$(git rev-parse --show-toplevel)"
-"${ROOT}/.github/scripts/release/refuse-published-release.sh"
+if [[ "${GITHUB_REPOSITORY:-}" == danehans/substrate ]]; then
+  "${ROOT}/hack/release/danehans/check-tag.sh" "${VERSION}"
+fi
+if [[ "${dry_run}" != true ]]; then
+  : "${GITHUB_ACTOR:?}" "${GH_TOKEN:?}"
+  "${ROOT}/.github/scripts/release/refuse-published-release.sh"
+fi
 package_dir="$(mktemp -d)"
 trap 'rm -rf "${package_dir}"' EXIT
 version="${VERSION#v}"
@@ -35,6 +47,14 @@ for chart in "${charts[@]}"; do
   helm package "${ROOT}/charts/${chart}" --destination "${package_dir}" \
     --version "${version}" --app-version "${VERSION}"
 done
+
+if [[ "${dry_run}" == true ]]; then
+  for chart in "${charts[@]}"; do
+    helm template "${chart}" "${package_dir}/${chart}-${version}.tgz" --namespace ate-system >/dev/null
+  done
+  echo "Dry run: packaged and rendered ${#charts[@]} charts; nothing published."
+  exit 0
+fi
 
 helm registry login "${KO_DOCKER_REPO%%/*}" --username "${GITHUB_ACTOR}" \
   --password-stdin <<<"${GH_TOKEN}"

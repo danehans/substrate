@@ -41,5 +41,5 @@ global:
 imagePullSecrets: []
 image:
   registry: ghcr.io
-  repository: kagent-dev/substrate
+  repository: danehans/substrate
   tag: ""

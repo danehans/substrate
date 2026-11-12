@@ -169,7 +169,7 @@ are emitted without a tag, letting `ko resolve` supply the digest at build time.
 {{- define "substrate.componentImage" -}}
 {{- $name := index . 0 -}}
 {{- $ctx := index . 1 -}}
-{{/* image.registry used to carry the full prefix (ghcr.io/kagent-dev/substrate).
+{{/* image.registry used to carry the full prefix (ghcr.io/danehans/substrate).
      It is now the registry host only, joined onto image.repository -- the same
      registry/repository split every kagent-family chart uses, so one
      global.imageRegistry value redirects them all. A values file still carrying
@@ -180,7 +180,7 @@ are emitted without a tag, letting `ko resolve` supply the digest at build time.
      sentinel below -- unambiguously not the old host+path shape, so the guard
      lets it through. */ -}}
 {{- if and (contains "/" $ctx.Values.image.registry) (not (contains "://" $ctx.Values.image.registry)) -}}
-{{- fail (printf "image.registry (%q) carries a path. It is now the registry host only: keep the path in image.repository, e.g. registry: ghcr.io, repository: kagent-dev/substrate." $ctx.Values.image.registry) -}}
+{{- fail (printf "image.registry (%q) carries a path. It is now the registry host only: keep the path in image.repository, e.g. registry: ghcr.io, repository: danehans/substrate." $ctx.Values.image.registry) -}}
 {{- end -}}
 {{- $registry := printf "%s/%s" (default $ctx.Values.image.registry (($ctx.Values.global).imageRegistry)) $ctx.Values.image.repository -}}
 {{- $tag := $ctx.Values.image.tag | default $ctx.Chart.AppVersion -}}

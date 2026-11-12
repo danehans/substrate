@@ -44,7 +44,7 @@ Install substrate-atelet before substrate, and upgrade them in that order. The
 [version skew policy](../../docs/reference/version-skew-policy.md) upgrades
 atelet before ate-api-server.
 
-By default, component images are pulled from `ghcr.io/kagent-dev/substrate`
+By default, component images are pulled from `ghcr.io/danehans/substrate`
 using the chart `appVersion` as the tag. Override `image.registry` and
 `image.tag` to install from a different image repository or tag.
 
@@ -98,6 +98,7 @@ See `values.yaml` for the full set; the important keys:
 | `ateApi.actorJWTIssuer` | `https://<idp-service>.<namespace>.svc` | Issuer placed in actor JWTs; set a stable URL reachable by relying parties |
 | `objectStorePlugin.extraEnv` | `[]` | Object storage credentials/settings shared by both object-store plugins |
 | `objectStorePlugin.control.resources` / `objectStorePlugin.node.resources` | see `values.yaml` | Resources for the API and node object-store sidecars |
+| `atenetEgress.agentgateway.upstreamConnections` | `perExecution` | Upstream connection pooling for actor requests; `perExecution` or `shared`. See [open tunnel revocation](../../docs/guides/actor-quarantine.md#open-tunnel-revocation-and-availability) |
 | `ateApi.logLevel` | `info` | API server log level in its mounted config; one of `debug`, `info`, `warn`, or `error` |
 | `ateApi.authorization.bootstrapOwners` | `[]` | Global owners; empty defaults to the release's shared `ate-client` ServiceAccount |
 | `ateApi.extraArgs` | `[]` | Additional command-line arguments appended to the ateapi defaults |
