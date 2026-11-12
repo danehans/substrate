@@ -1032,6 +1032,159 @@ func TestValidateSuspendActorRequest(t *testing.T) {
 	}
 }
 
+func TestValidateHoldActorRequest(t *testing.T) {
+	ref := &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"}
+	tests := []struct {
+		name string
+		req  *ateapi.HoldActorRequest
+		want field.ErrorList
+	}{{
+		"valid",
+		&ateapi.HoldActorRequest{Actor: ref, Reason: "incident", RequestId: "hold-1"},
+		nil,
+	}, {
+		"all fields",
+		&ateapi.HoldActorRequest{Actor: ref, Reason: "incident", IncidentId: "INC-7", ExpectedUid: "0b5f9d3c-1f6a-4c8e-9a2b-3d4e5f607182", ExpectedActivation: "01JDQ5W2R3V6Z8B4N7K9M1P0XA", RequestId: "hold-1"},
+		nil,
+	}, {
+		"missing actor",
+		&ateapi.HoldActorRequest{Reason: "incident", RequestId: "hold-1"},
+		field.ErrorList{field.Required(field.NewPath("actor"), "")},
+	}, {
+		"missing reason",
+		&ateapi.HoldActorRequest{Actor: ref, RequestId: "hold-1"},
+		field.ErrorList{field.Required(field.NewPath("reason"), "")},
+	}, {
+		"missing request_id",
+		&ateapi.HoldActorRequest{Actor: ref, Reason: "incident"},
+		field.ErrorList{field.Required(field.NewPath("request_id"), "")},
+	}, {
+		"reason too long",
+		&ateapi.HoldActorRequest{Actor: ref, Reason: strings.Repeat("r", 1025), RequestId: "hold-1"},
+		field.ErrorList{field.TooLong(field.NewPath("reason"), "", 1024).WithOrigin("maxLength")},
+	}, {
+		"incident_id too long",
+		&ateapi.HoldActorRequest{Actor: ref, Reason: "incident", IncidentId: strings.Repeat("i", 129), RequestId: "hold-1"},
+		field.ErrorList{field.TooLong(field.NewPath("incident_id"), "", 128).WithOrigin("maxLength")},
+	}, {
+		"invalid expected_uid",
+		&ateapi.HoldActorRequest{Actor: ref, Reason: "incident", ExpectedUid: "not-a-uuid", RequestId: "hold-1"},
+		field.ErrorList{field.Invalid(field.NewPath("expected_uid"), "not-a-uuid", "").WithOrigin("format=k8s-uuid")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateHoldActorRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestValidateReleaseActorHoldRequest(t *testing.T) {
+	ref := &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"}
+	tests := []struct {
+		name string
+		req  *ateapi.ReleaseActorHoldRequest
+		want field.ErrorList
+	}{{
+		"valid",
+		&ateapi.ReleaseActorHoldRequest{Actor: ref, HoldRequestId: "hold-1", RequestId: "release-1"},
+		nil,
+	}, {
+		"missing actor",
+		&ateapi.ReleaseActorHoldRequest{HoldRequestId: "hold-1", RequestId: "release-1"},
+		field.ErrorList{field.Required(field.NewPath("actor"), "")},
+	}, {
+		"missing hold_request_id",
+		&ateapi.ReleaseActorHoldRequest{Actor: ref, RequestId: "release-1"},
+		field.ErrorList{field.Required(field.NewPath("hold_request_id"), "")},
+	}, {
+		"missing request_id",
+		&ateapi.ReleaseActorHoldRequest{Actor: ref, HoldRequestId: "hold-1"},
+		field.ErrorList{field.Required(field.NewPath("request_id"), "")},
+	}, {
+		"invalid expected_uid",
+		&ateapi.ReleaseActorHoldRequest{Actor: ref, HoldRequestId: "hold-1", ExpectedUid: "not-a-uuid", RequestId: "release-1"},
+		field.ErrorList{field.Invalid(field.NewPath("expected_uid"), "not-a-uuid", "").WithOrigin("format=k8s-uuid")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateReleaseActorHoldRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestValidateQuarantineActorRequest(t *testing.T) {
+	ref := &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"}
+	tests := []struct {
+		name string
+		req  *ateapi.QuarantineActorRequest
+		want field.ErrorList
+	}{{
+		"valid",
+		&ateapi.QuarantineActorRequest{Actor: ref, Reason: "incident", RequestId: "q-1"},
+		nil,
+	}, {
+		"all fields",
+		&ateapi.QuarantineActorRequest{Actor: ref, Reason: "incident", IncidentId: "INC-7", ExpectedUid: "0b5f9d3c-1f6a-4c8e-9a2b-3d4e5f607182", ExpectedActivation: "01JDQ5W2R3V6Z8B4N7K9M1P0XA", RequestId: "q-1"},
+		nil,
+	}, {
+		"missing actor",
+		&ateapi.QuarantineActorRequest{Reason: "incident", RequestId: "q-1"},
+		field.ErrorList{field.Required(field.NewPath("actor"), "")},
+	}, {
+		"missing reason",
+		&ateapi.QuarantineActorRequest{Actor: ref, RequestId: "q-1"},
+		field.ErrorList{field.Required(field.NewPath("reason"), "")},
+	}, {
+		"missing request_id",
+		&ateapi.QuarantineActorRequest{Actor: ref, Reason: "incident"},
+		field.ErrorList{field.Required(field.NewPath("request_id"), "")},
+	}, {
+		// The suspend's request_id adds "/suspend", which must fit in 128.
+		"request_id too long",
+		&ateapi.QuarantineActorRequest{Actor: ref, Reason: "incident", RequestId: strings.Repeat("q", 121)},
+		field.ErrorList{field.TooLong(field.NewPath("request_id"), "", 120).WithOrigin("maxLength")},
+	}, {
+		"invalid expected_uid",
+		&ateapi.QuarantineActorRequest{Actor: ref, Reason: "incident", ExpectedUid: "not-a-uuid", RequestId: "q-1"},
+		field.ErrorList{field.Invalid(field.NewPath("expected_uid"), "not-a-uuid", "").WithOrigin("format=k8s-uuid")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateQuarantineActorRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestValidateReleaseQuarantineRequest(t *testing.T) {
+	ref := &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"}
+	tests := []struct {
+		name string
+		req  *ateapi.ReleaseQuarantineRequest
+		want field.ErrorList
+	}{{
+		"valid",
+		&ateapi.ReleaseQuarantineRequest{Actor: ref, QuarantineRequestId: "q-1", Reason: "cleared", RequestId: "release-1"},
+		nil,
+	}, {
+		"missing quarantine_request_id",
+		&ateapi.ReleaseQuarantineRequest{Actor: ref, Reason: "cleared", RequestId: "release-1"},
+		field.ErrorList{field.Required(field.NewPath("quarantine_request_id"), "")},
+	}, {
+		"missing reason",
+		&ateapi.ReleaseQuarantineRequest{Actor: ref, QuarantineRequestId: "q-1", RequestId: "release-1"},
+		field.ErrorList{field.Required(field.NewPath("reason"), "")},
+	}, {
+		"missing request_id",
+		&ateapi.ReleaseQuarantineRequest{Actor: ref, QuarantineRequestId: "q-1", Reason: "cleared"},
+		field.ErrorList{field.Required(field.NewPath("request_id"), "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateReleaseQuarantineRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
 // validActor returns a minimal Actor which should pass input validation.
 func validActor(mods ...func(*ateapi.Actor)) *ateapi.Actor {
 	a := &ateapi.Actor{

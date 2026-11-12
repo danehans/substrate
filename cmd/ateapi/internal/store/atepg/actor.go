@@ -36,6 +36,11 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapi.Actor) (*at
 	// fix it later.
 	dbActor := proto.Clone(actor).(*ateapi.Actor)
 	setCreateMetadata(dbActor.Metadata)
+	// A new Actor has no holds or quarantine, even if it replaces a held one.
+	if dbActor.Status != nil {
+		dbActor.Status.Holds = nil
+		dbActor.Status.Quarantine = nil
+	}
 	if err := validateSnapshotURIs("actor "+resources.ActorRefFromActor(dbActor).String(), dbActor.GetStatus().GetSnapshots()...); err != nil {
 		return nil, err
 	}
@@ -93,13 +98,29 @@ func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resourc
 // updateActor applies mutate to the stored actor through q, which is the pool
 // or a transaction the write must commit with.
 func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
+	dbActor, err := getActorRow(ctx, q, actorRef, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
+		return nil, err
+	}
+	return writeActorRow(ctx, q, actorRef, dbActor, mutate, markForDeletion)
+}
+
+// getActorRow reads the stored actor and checks that its uid and version
+// columns match its metadata. forUpdate locks the row until the transaction
+// q runs in ends.
+func getActorRow(ctx context.Context, q querier, actorRef resources.ActorRef, forUpdate bool) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
+	query := `SELECT uid, version, proto FROM actors WHERE atespace = $1 AND name = $2`
+	if forUpdate {
+		query += ` FOR UPDATE`
+	}
 	var currentUID string
 	var currentVersion int64
 	var currentBytes []byte
-	if err := q.QueryRow(ctx, `
-			SELECT uid, version, proto FROM actors
-			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
+	if err := q.QueryRow(ctx, query, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
@@ -113,14 +134,30 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 	if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
 		return nil, err
 	}
-	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
-		return nil, err
-	}
+	return dbActor, nil
+}
+
+// writeActorRow applies mutate to dbActor, as getActorRow read it, and writes
+// it back only if the stored row is still at the version read. mutate cannot
+// change status.holds or status.quarantine: only the hold writes in
+// actor_hold.go set them, before they call writeActorRow.
+func writeActorRow(ctx context.Context, q querier, actorRef resources.ActorRef, dbActor *ateapi.Actor, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
+	atespace, name := actorRef.Atespace, actorRef.Name
+	currentUID, currentVersion := dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion()
 	oldMeta := proto.CloneOf(dbActor.Metadata)
+	holds := cloneHolds(dbActor.GetStatus().GetHolds())
+	quarantine := proto.CloneOf(dbActor.GetStatus().GetQuarantine())
 	if mutate != nil {
 		if err := mutate(dbActor); err != nil {
 			return nil, err
 		}
+	}
+	if (len(holds) > 0 || quarantine != nil) && dbActor.Status == nil {
+		dbActor.Status = &ateapi.ActorStatus{}
+	}
+	if dbActor.Status != nil {
+		dbActor.Status.Holds = holds
+		dbActor.Status.Quarantine = quarantine
 	}
 	if err := validateSnapshotURIs("actor "+actorRef.String(), dbActor.GetStatus().GetSnapshots()...); err != nil {
 		return nil, err
@@ -180,7 +217,14 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	if deleted.GetStatus().GetWorkerAssignment() != nil {
 		return nil, fmt.Errorf("%w: actor %s/%s is still assigned to a worker", store.ErrFailedPrecondition, atespace, name)
 	}
+	if len(deleted.GetStatus().GetHolds()) > 0 {
+		return nil, fmt.Errorf("%w: actor %s/%s has a hold", store.ErrFailedPrecondition, atespace, name)
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM actors WHERE atespace = $1 AND name = $2`, atespace, name); err != nil {
+		if isForeignKeyViolation(err) {
+			// actor_holds still has a row for the Actor.
+			return nil, fmt.Errorf("%w: actor %s/%s has a hold", store.ErrFailedPrecondition, atespace, name)
+		}
 		return nil, fmt.Errorf("deleting actor %s/%s: %w", atespace, name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {

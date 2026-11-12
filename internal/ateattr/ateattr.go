@@ -53,6 +53,9 @@ const (
 	TemplateNameKey       = attribute.Key("ate.template.name")
 	TemplateAtespaceKey   = attribute.Key("ate.template.atespace")
 	ActorVersionKey       = attribute.Key("ate.actor.version")
+	// ActorActivationKey is ActorStatus.activation_id, the ULID of one Run or
+	// Restore of the actor. Records about an actor with no activation omit it.
+	ActorActivationKey = attribute.Key("ate.actor.activation")
 )
 
 // TemplateUnknown is the fallback for a template dimension the emitter cannot
@@ -96,6 +99,46 @@ const OTLPRelayKey = attribute.Key("ate.otlp.relay")
 // ActorStateKey is log-only. It is bounded, but it is only ever recorded beside
 // actor identity, which no metric may carry.
 const ActorStateKey = attribute.Key("ate.actor.state")
+
+// Keys of the ate.actor.hold_changed event. Logs only: they are recorded beside
+// actor identity, and every value but the action comes from a request or its
+// caller.
+const (
+	ActorHoldActionKey           = attribute.Key("ate.actor.hold.action")
+	ActorHoldHolderKey           = attribute.Key("ate.actor.hold.holder")
+	ActorHoldCallerKey           = attribute.Key("ate.actor.hold.caller")
+	ActorHoldReasonKey           = attribute.Key("ate.actor.hold.reason")
+	ActorHoldIncidentIDKey       = attribute.Key("ate.actor.hold.incident_id")
+	ActorHoldRequestIDKey        = attribute.Key("ate.actor.hold.request_id")
+	ActorHoldReleaseRequestIDKey = attribute.Key("ate.actor.hold.release_request_id")
+)
+
+// Values for ActorHoldActionKey.
+const (
+	HoldActionPlaced   = "placed"
+	HoldActionReleased = "released"
+)
+
+// Keys of the ate.actor.quarantine_changed event. Logs only, like the hold
+// keys.
+const (
+	ActorQuarantineActionKey           = attribute.Key("ate.actor.quarantine.action")
+	ActorQuarantineCallerKey           = attribute.Key("ate.actor.quarantine.caller")
+	ActorQuarantineReasonKey           = attribute.Key("ate.actor.quarantine.reason")
+	ActorQuarantineIncidentIDKey       = attribute.Key("ate.actor.quarantine.incident_id")
+	ActorQuarantineRequestIDKey        = attribute.Key("ate.actor.quarantine.request_id")
+	ActorQuarantineReleaseRequestIDKey = attribute.Key("ate.actor.quarantine.release_request_id")
+	ActorQuarantineStepsKey            = attribute.Key("ate.actor.quarantine.steps")
+)
+
+// Values for ActorQuarantineActionKey.
+const (
+	QuarantineActionQuarantined   = "quarantined"
+	QuarantineActionSuspended     = "suspended"
+	QuarantineActionTerminated    = "terminated"
+	QuarantineActionReleased      = "released"
+	QuarantineActionResumeRefused = "resume_refused"
+)
 
 // Values for ActorStateKey, mirroring ateapi.ActorState with the
 // ACTOR_STATE_ prefix dropped so the two cannot fork. ActorStateDeleted is the
@@ -454,7 +497,7 @@ func ActorRefAttributes(actorRef resources.ActorRef) []attribute.KeyValue {
 
 // ActorAttributes is nil-safe; a nil Actor yields zero-valued attributes.
 func ActorAttributes(a *ateapi.Actor) []attribute.KeyValue {
-	return []attribute.KeyValue{
+	attrs := []attribute.KeyValue{
 		AtespaceKey.String(a.GetMetadata().GetAtespace()),
 		ActorNameKey.String(a.GetMetadata().GetName()),
 		ActorUIDKey.String(a.GetMetadata().GetUid()),
@@ -462,6 +505,10 @@ func ActorAttributes(a *ateapi.Actor) []attribute.KeyValue {
 		TemplateAtespaceKey.String(a.GetActorTemplate().GetAtespace()),
 		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),
 	}
+	if id := a.GetStatus().GetActivationId(); id != "" {
+		attrs = append(attrs, ActorActivationKey.String(id))
+	}
+	return attrs
 }
 
 // ActorLogLabels returns the actor identity stamped on every actor log record. A
@@ -479,6 +526,9 @@ func ActorLogLabels(a resources.ActorAttribution, containerName string) map[stri
 	if containerName != "" {
 		labels[string(ActorContainerNameKey)] = containerName
 	}
+	if a.ActivationID != "" {
+		labels[string(ActorActivationKey)] = a.ActivationID
+	}
 	return labels
 }
 
@@ -487,13 +537,17 @@ func ActorLogLabels(a resources.ActorAttribution, containerName string) map[stri
 // attributes. It must agree with ActorLogLabels key for key, or joining a
 // component record to the actor lifecycle stream takes two spellings.
 func ActorLogAttrs(a resources.ActorAttribution) []slog.Attr {
-	return []slog.Attr{
+	attrs := []slog.Attr{
 		slog.String(string(AtespaceKey), a.Ref.Atespace),
 		slog.String(string(ActorNameKey), a.Ref.Name),
 		slog.String(string(ActorUIDKey), a.UID),
 		slog.String(string(TemplateAtespaceKey), a.TemplateAtespace),
 		slog.String(string(TemplateNameKey), a.TemplateName),
 	}
+	if a.ActivationID != "" {
+		attrs = append(attrs, slog.String(string(ActorActivationKey), a.ActivationID))
+	}
+	return attrs
 }
 
 // ActorRefLogAttrs is ActorLogAttrs for a record written before the Actor

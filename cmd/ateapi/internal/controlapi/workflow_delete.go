@@ -31,8 +31,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// DeleteActor executes the workflow to delete an actor. Idempotent.
-func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.Actor, error) {
+// DeleteActor executes the workflow to delete an actor. Idempotent. A
+// non-empty expectedActivation deletes the actor only while it holds that
+// activation; see ensureMarkedDeleting.
+func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, expectedActivation string) (*ateapi.Actor, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	ctx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
@@ -40,7 +42,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	}
 	defer lease.Close()
 
-	actor, err := w.ensureMarkedDeleting(ctx, actorRef, precondition)
+	actor, err := w.ensureMarkedDeleting(ctx, actorRef, precondition, expectedActivation)
 	if err != nil {
 		return nil, err
 	}
@@ -97,12 +99,25 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 }
 
 // ensureAteletTerminated calls atelet to terminate the workload for opName.
-func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string) (err error) {
+func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string) error {
+	return w.terminateAtelet(ctx, actorRef, actor, actorTemplate, opName, false)
+}
+
+// ensureAteletTerminatedForQuarantine requires an atelet response. A missing
+// Node object does not prove that its workload or tunnels have stopped.
+func (w *ActorWorkflow) ensureAteletTerminatedForQuarantine(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) error {
+	return w.terminateAtelet(ctx, actorRef, actor, actorTemplate, ateattr.OperationSuspend, true)
+}
+
+func (w *ActorWorkflow) terminateAtelet(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string, requireResponse bool) (err error) {
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
 	nodeName := actor.GetStatus().GetAssignedNode()
 	if nodeName == "" {
+		if requireResponse {
+			return apierror.FailedPrecondition("Actor %s has no node to terminate", actorRef)
+		}
 		slog.InfoContext(ctx, "actor has no assigned node, skipping atelet terminate request", slog.Any("actor", actorRef))
 		return nil
 	}
@@ -118,6 +133,9 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			return fmt.Errorf("while connecting to atelet on node %q: %w (and while checking the node: %w)", nodeName, err, nodeErr)
 		}
 		if gone {
+			if requireResponse {
+				return apierror.Unavailable("cannot confirm termination of Actor %s: assigned node %q is gone", actorRef, nodeName)
+			}
 			// A deleted Node object counts as the node being gone for good. If the
 			// machine still runs, whatever atelet holds for the actor stays there.
 			slog.WarnContext(ctx, "assigned node no longer exists, skipping atelet terminate request",
@@ -163,7 +181,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			slog.InfoContext(ctx, "workload already terminated on atelet", slog.Any("actor", actorRef))
 			return nil
 		}
-		return handleAteletError(ctx, w.store, actorRef, opName, "Terminate", true, err)
+		return handleAteletError(ctx, w.store, actor, opName, "Terminate", true, err)
 	}
 
 	return nil
@@ -235,7 +253,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 	updatedActor, _, err := w.store.UpdateActorAndRelease(ctx, actorRef, precondition, func(dbActor *ateapi.Actor) error {
 		clearLocalSnapshots(dbActor.Status)
 		dbActor.Status.AssignedNode = ""
-		dbActor.Status.WorkerAssignment = nil
+		clearWorkerAssignment(dbActor.Status)
 		return nil
 	})
 	if err != nil {
@@ -249,7 +267,7 @@ var errAlreadyMarked = errors.New("already marked for deletion")
 // ensureMarkedDeleting sets the actor's delete_time, checking precondition,
 // and moves it to DELETING, returning the stored copy. Skips when a previous
 // attempt already marked the actor.
-func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (updated *ateapi.Actor, err error) {
+func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, expectedActivation string) (updated *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "MarkDeleting")
 	defer func() { err = done(err) }()
 
@@ -258,6 +276,15 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		if toUpdate.GetMetadata().GetDeleteTime() != nil {
 			alreadyDeleting = toUpdate
 			return errAlreadyMarked
+		}
+		// The activation is checked only when the delete starts: a retried
+		// delete finds the activation cleared once the worker is released.
+		if got := toUpdate.GetStatus().GetActivationId(); expectedActivation != "" && got != expectedActivation {
+			return apierror.FailedPrecondition("Actor %s holds activation %q, not the expected %q", actorRef, got, expectedActivation)
+		}
+		// A held actor keeps its snapshots until every hold is released.
+		if err := checkNotHeld(actorRef, toUpdate); err != nil {
+			return err
 		}
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_DELETING
 		return nil

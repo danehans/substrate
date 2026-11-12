@@ -435,7 +435,7 @@ func TestHandleAteletError(t *testing.T) {
 			seedActor(t, ctx, st, actorRef)
 			seedWorker(t, ctx, st, actorRef)
 
-			err := handleAteletError(tt.ctx, st, actorRef, ateattr.OperationResume, tt.rpc, tt.isTerminateRPC, tt.err)
+			err := handleAteletError(tt.ctx, st, loadCrashActor(t, st, actorRef), ateattr.OperationResume, tt.rpc, tt.isTerminateRPC, tt.err)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Errorf("apierror.Code(handleAteletError()) = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
@@ -505,7 +505,7 @@ func TestNewActorCrash(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := newActorCrash(tt.opName, tt.message).GetMessage(); got != tt.want {
+			if got := newActorCrash(tt.opName, tt.message, "").GetMessage(); got != tt.want {
 				t.Errorf("newActorCrash().Message = %q, want %q", got, tt.want)
 			}
 		})
@@ -656,7 +656,7 @@ func TestCrashActorAndFail(t *testing.T) {
 		seedActor(t, ctx, st, actorRef)
 		seedWorker(t, ctx, st, actorRef)
 
-		err := crashActorAndFail(ctx, st, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
+		err := crashActorAndFail(ctx, st, loadCrashActor(t, st, actorRef), ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 		}
@@ -670,7 +670,7 @@ func TestCrashActorAndFail(t *testing.T) {
 		seedWorker(t, ctx, st, actorRef)
 
 		releaseErr := errors.New("state store unavailable")
-		err := crashActorAndFail(ctx, failingCrashStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
+		err := crashActorAndFail(ctx, failingCrashStore{Interface: st, err: releaseErr}, loadCrashActor(t, st, actorRef), ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
 		if !errors.Is(err, releaseErr) {
 			t.Fatalf("crashActorAndFail() = %v, want it to wrap %v", err, releaseErr)
 		}
@@ -693,7 +693,7 @@ func TestCrashActorAndFail(t *testing.T) {
 		seedWorker(t, ctx, st, actorRef)
 
 		for _, conflict := range []error{store.ErrVersionConflict, store.ErrUIDConflict} {
-			err := crashActorAndFail(ctx, failingCrashStore{Interface: st, err: conflict}, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
+			err := crashActorAndFail(ctx, failingCrashStore{Interface: st, err: conflict}, loadCrashActor(t, st, actorRef), ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
 			if got := apierror.Code(err); got != codes.Aborted {
 				t.Errorf("apierror.Code(err) for %v = %v, want %v (err: %v)", conflict, got, codes.Aborted, err)
 			}
@@ -906,4 +906,21 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 	if gotEvents := events(); len(gotEvents) != 1 {
 		t.Errorf("got %d crash events after re-crashing, want 1", len(gotEvents))
 	}
+}
+
+func loadCrashActor(t *testing.T, st crashActorStore, ref resources.ActorRef) *ateapi.Actor {
+	t.Helper()
+	actor, err := st.GetActor(context.Background(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return actor
+}
+
+func crashActor(ctx context.Context, st crashActorStore, ref resources.ActorRef, op, message string) error {
+	actor, err := st.GetActor(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("while loading actor to crash: %w", err)
+	}
+	return crashActorIfCurrent(ctx, st, actor, op, message)
 }

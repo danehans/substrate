@@ -1,5 +1,10 @@
 [
   {
+    "rule": "delete-options-shape",
+    "subject": "substrate.ateapi.v1.DeleteOptions",
+    "message": "DeleteOptions field \"expected_activation\" is not allowed - want only optional \"version\" int64 and optional \"uid\" string"
+  },
+  {
     "rule": "documented",
     "subject": "substrate.ateapi.v1.Actor",
     "message": "message has no doc comment"
@@ -261,11 +266,6 @@
   },
   {
     "rule": "documented",
-    "subject": "substrate.ateapi.v1.ResumeActorResponse.actor",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "substrate.ateapi.v1.SuspendActorRequest",
     "message": "message has no doc comment"
   },
@@ -278,11 +278,6 @@
     "rule": "documented",
     "subject": "substrate.ateapi.v1.SuspendActorResponse",
     "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "substrate.ateapi.v1.SuspendActorResponse.actor",
-    "message": "field has no doc comment"
   },
   {
     "rule": "documented",

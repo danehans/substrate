@@ -99,6 +99,9 @@ type fakeWorker struct {
 	// fidelities records the fidelity each checkpoint or restore arrived
 	// with, by RPC name.
 	fidelities map[string]ateworkerpb.SnapshotFidelity
+	// activations records the activation each run or restore arrived with,
+	// by RPC name.
+	activations map[string]string
 	// onCheckpoint, if non-nil, runs inside CheckpointWorkload after snapshot
 	// files are written.
 	onCheckpoint func()
@@ -145,6 +148,15 @@ func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFid
 	f.fidelities[rpc] = fidelity
 }
 
+func (f *fakeWorker) recordActivation(rpc, activationID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.activations == nil {
+		f.activations = map[string]string{}
+	}
+	f.activations[rpc] = activationID
+}
+
 func (f *fakeWorker) recordActorDirs(rpc string, actorDirs *ateworkerpb.ActorDirs) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -156,6 +168,7 @@ func (f *fakeWorker) recordActorDirs(rpc string, actorDirs *ateworkerpb.ActorDir
 
 func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkloadRequest) (*ateworkerpb.RunWorkloadResponse, error) {
 	f.recordActorDirs("RunWorkload", req.GetActorDirs())
+	f.recordActivation("RunWorkload", req.GetActivationId())
 	f.setStoppedBy(nil)
 	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: f.workerEpoch}, nil
 }
@@ -198,6 +211,7 @@ func (f *fakeWorker) CheckpointWorkload(ctx context.Context, req *ateworkerpb.Ch
 func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.RestoreWorkloadRequest) (*ateworkerpb.RestoreWorkloadResponse, error) {
 	f.recordActorDirs("RestoreWorkload", req.GetActorDirs())
 	f.recordFidelity("RestoreWorkload", req.GetFidelity())
+	f.recordActivation("RestoreWorkload", req.GetActivationId())
 	f.preserveRestoreDir = req.GetPreserveRestoreDir()
 	if f.onRestore != nil {
 		f.onRestore()
@@ -289,12 +303,14 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 	ctx := t.Context()
 
 	const (
-		atespace      = "ate-demo"
-		actorName     = "counter"
-		actorUID      = "01234567-89ab-cdef-0123-456789abcdef"
-		workerPodUID  = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
-		snapshotName  = "pause-snap-1"
-		snapshotName2 = "pause-snap-2"
+		atespace          = "ate-demo"
+		actorName         = "counter"
+		actorUID          = "01234567-89ab-cdef-0123-456789abcdef"
+		workerPodUID      = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
+		snapshotName      = "pause-snap-1"
+		snapshotName2     = "pause-snap-2"
+		runActivation     = "01JDQ5W2R3V6Z8B4N7K9M1P0XA"
+		restoreActivation = "01JDQ5W2R3V6Z8B4N7K9M1P0XB"
 	)
 
 	const workerEpoch = 7
@@ -330,6 +346,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		WorkerPodUid:          workerPodUID,
 		SandboxRuntime:        runtimeFor(t, sandboxRec),
 		Spec:                  spec,
+		ActivationId:          runActivation,
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -384,9 +401,15 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity, useDir
 		SandboxRuntime:        runtimeFor(t, sandboxRec),
 		Spec:                  spec,
 		Snapshot:              lifecycleSnapshot(actorUID, snapshotName, 1, fidelity),
+		ActivationId:          restoreActivation,
 	})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
+	}
+	for rpc, want := range map[string]string{"RunWorkload": runActivation, "RestoreWorkload": restoreActivation} {
+		if got := worker.activations[rpc]; got != want {
+			t.Errorf("%s activation_id = %q, want %q", rpc, got, want)
+		}
 	}
 	if got := restoreResp.GetWorkerEpoch(); got != workerEpoch {
 		t.Errorf("Restore worker_epoch = %d, want %d", got, workerEpoch)

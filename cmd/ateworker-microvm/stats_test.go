@@ -55,12 +55,14 @@ func TestActorBootParamsAttribution(t *testing.T) {
 				actorUID:         "cccccccc-0000-4000-8000-000000000003",
 				templateAtespace: "template-ns-d",
 				templateName:     "template-name-e",
+				activationID:     "activation-f",
 			},
 			want: resources.ActorAttribution{
 				Ref:              resources.ActorRef{Atespace: "atespace-a", Name: "actor-b"},
 				UID:              "cccccccc-0000-4000-8000-000000000003",
 				TemplateAtespace: "template-ns-d",
 				TemplateName:     "template-name-e",
+				ActivationID:     "activation-f",
 			},
 		},
 		{
@@ -91,6 +93,7 @@ func TestActorBootParamsAttributionMatchesRequest(t *testing.T) {
 		ActorUid:              "cccccccc-0000-4000-8000-000000000003",
 		ActorTemplateAtespace: "template-ns-d",
 		ActorTemplateName:     "template-name-e",
+		ActivationId:          "activation-f",
 	}
 
 	// Mirrors the actorBootParams literal in RunWorkload and RestoreWorkload.
@@ -99,6 +102,7 @@ func TestActorBootParamsAttributionMatchesRequest(t *testing.T) {
 		actorUID:         req.GetActorUid(),
 		templateAtespace: req.GetActorTemplateAtespace(),
 		templateName:     req.GetActorTemplateName(),
+		activationID:     req.GetActivationId(),
 	}
 
 	if diff := cmp.Diff(workerstats.ActorAttributionFromRequest(req), p.actorAttribution()); diff != "" {

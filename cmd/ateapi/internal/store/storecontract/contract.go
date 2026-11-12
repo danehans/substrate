@@ -332,6 +332,8 @@ func testMarkForDeletion[R any, T resourceMessage](t *testing.T, c markForDeleti
 // notifications is not covered here; see atepg's own test file for that.
 func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runActorContractTests(t, setup)
+	runLifecycleReceiptContractTests(t, setup)
+	runActorHoldContractTests(t, setup)
 	runEgressPolicyContractTests(t, setup)
 	runWorkerContractTests(t, setup)
 	runWorkerAssignmentContractTests(t, setup)
@@ -341,6 +343,603 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runLeaseContractTests(t, setup)
 	runListOptionsContractTests(t, setup)
 	runUnknownFieldContractTests(t, setup)
+}
+
+func runLifecycleReceiptContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	const requestID = "incident-7/suspend-1"
+	newReceipt := func(state ateapi.ActorState) func(*ateapi.Actor) *ateapi.LifecycleReceipt {
+		return func(stored *ateapi.Actor) *ateapi.LifecycleReceipt {
+			return &ateapi.LifecycleReceipt{
+				RequestId: requestID,
+				Operation: ateapi.LifecycleOperation_LIFECYCLE_OPERATION_SUSPEND,
+				Actor:     &ateapi.ObjectRef{Atespace: stored.GetMetadata().GetAtespace(), Name: stored.GetMetadata().GetName()},
+				ActorUid:  stored.GetMetadata().GetUid(),
+				State:     state,
+			}
+		}
+	}
+	setState := func(state ateapi.ActorState) func(*ateapi.Actor) error {
+		return func(a *ateapi.Actor) error {
+			a.Status.State = state
+			return nil
+		}
+	}
+	createActor := func(t *testing.T, s store.Interface) (*ateapi.Actor, resources.ActorRef) {
+		t.Helper()
+		mustCreateAtespace(t, s, testAtespace)
+		created, err := s.CreateActor(context.Background(), newTestSuspendedActor(testAtespace, "session-1"))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		return created, resources.ActorRefFromActor(created)
+	}
+
+	t.Run("UpdateActorWithReceipt_CreateAndReplace", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		created, actorRef := createActor(t, s)
+
+		if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetActorLifecycleReceipt before any write = %v, want ErrNotFound", err)
+		}
+		if _, _, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(created), nil, newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDING), false); !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("replacing a receipt that does not exist = %v, want ErrVersionConflict", err)
+		}
+
+		suspending, first, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(created), setState(ateapi.ActorState_ACTOR_STATE_SUSPENDING), newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDING), true)
+		if err != nil {
+			t.Fatalf("UpdateActorWithReceipt create failed: %v", err)
+		}
+		if got := suspending.GetMetadata().GetVersion(); got <= created.GetMetadata().GetVersion() {
+			t.Errorf("actor version = %d, want it advanced past %d", got, created.GetMetadata().GetVersion())
+		}
+		if got := first.GetActorUid(); got != created.GetMetadata().GetUid() {
+			t.Errorf("receipt actor_uid = %q, want %q", got, created.GetMetadata().GetUid())
+		}
+		if got, want := first.GetExpireTime().AsTime().Sub(first.GetCreateTime().AsTime()), store.LifecycleReceiptRetention; got != want {
+			t.Errorf("receipt retention = %v, want %v", got, want)
+		}
+		got, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID)
+		if err != nil {
+			t.Fatalf("GetActorLifecycleReceipt failed: %v", err)
+		}
+		if diff := cmp.Diff(first, got, protocmp.Transform()); diff != "" {
+			t.Errorf("stored receipt (-want +got):\n%s", diff)
+		}
+
+		// A second create for the request fails, and its actor write is
+		// rolled back with it.
+		if _, _, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(suspending), setState(ateapi.ActorState_ACTOR_STATE_CRASHED), newReceipt(ateapi.ActorState_ACTOR_STATE_CRASHED), true); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Fatalf("second create = %v, want ErrAlreadyExists", err)
+		}
+		if after, err := s.GetActor(ctx, actorRef); err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		} else if diff := cmp.Diff(suspending, after, protocmp.Transform()); diff != "" {
+			t.Errorf("actor after a failed create (-want +got):\n%s", diff)
+		}
+
+		suspended, replaced, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(suspending), setState(ateapi.ActorState_ACTOR_STATE_SUSPENDED), newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDED), false)
+		if err != nil {
+			t.Fatalf("UpdateActorWithReceipt replace failed: %v", err)
+		}
+		if got := suspended.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+			t.Errorf("actor state = %v, want SUSPENDED", got)
+		}
+		if got := replaced.GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+			t.Errorf("replaced receipt state = %v, want SUSPENDED", got)
+		}
+		if !proto.Equal(replaced.GetCreateTime(), first.GetCreateTime()) || !proto.Equal(replaced.GetExpireTime(), first.GetExpireTime()) {
+			t.Errorf("replace changed the receipt timestamps to %v/%v, want %v/%v", replaced.GetCreateTime(), replaced.GetExpireTime(), first.GetCreateTime(), first.GetExpireTime())
+		}
+	})
+
+	t.Run("UpdateActorWithReceipt_NilMutateWritesOnlyReceipt", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		created, actorRef := createActor(t, s)
+
+		stored, _, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(created), nil, newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDED), true)
+		if err != nil {
+			t.Fatalf("UpdateActorWithReceipt failed: %v", err)
+		}
+		if diff := cmp.Diff(created, stored, protocmp.Transform()); diff != "" {
+			t.Errorf("returned actor (-want +got):\n%s", diff)
+		}
+		if after, err := s.GetActor(ctx, actorRef); err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		} else if after.GetMetadata().GetVersion() != created.GetMetadata().GetVersion() {
+			t.Errorf("actor version = %d, want %d unchanged", after.GetMetadata().GetVersion(), created.GetMetadata().GetVersion())
+		}
+		if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID); err != nil {
+			t.Errorf("GetActorLifecycleReceipt failed: %v", err)
+		}
+	})
+
+	t.Run("UpdateActorWithReceipt_FailureStoresNothing", func(t *testing.T) {
+		mutateErr := errors.New("mutate refused")
+		for _, tc := range []struct {
+			name         string
+			precondition func(created *ateapi.Actor) store.Precondition
+			mutate       func(*ateapi.Actor) error
+			wantErr      error
+		}{
+			{
+				name: "stale version",
+				precondition: func(c *ateapi.Actor) store.Precondition {
+					return store.Precondition{UID: c.GetMetadata().GetUid(), Version: c.GetMetadata().GetVersion() + 1}
+				},
+				wantErr: store.ErrVersionConflict,
+			},
+			{
+				name: "other uid",
+				precondition: func(c *ateapi.Actor) store.Precondition {
+					return store.Precondition{UID: foreignUID, Version: c.GetMetadata().GetVersion()}
+				},
+				wantErr: store.ErrUIDConflict,
+			},
+			{
+				name:         "missing precondition",
+				precondition: func(*ateapi.Actor) store.Precondition { return store.Precondition{} },
+				wantErr:      store.ErrPreconditionRequired,
+			},
+			{
+				name:         "mutate error",
+				precondition: func(c *ateapi.Actor) store.Precondition { return store.PreconditionFrom(c) },
+				mutate:       func(*ateapi.Actor) error { return mutateErr },
+				wantErr:      mutateErr,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := setup(t)
+				ctx := context.Background()
+				created, actorRef := createActor(t, s)
+				if _, _, err := s.UpdateActorWithReceipt(ctx, actorRef, tc.precondition(created), tc.mutate, newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDED), true); !errors.Is(err, tc.wantErr) {
+					t.Fatalf("UpdateActorWithReceipt = %v, want %v", err, tc.wantErr)
+				}
+				if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID); !errors.Is(err, store.ErrNotFound) {
+					t.Errorf("GetActorLifecycleReceipt after the failed write = %v, want ErrNotFound", err)
+				}
+			})
+		}
+	})
+
+	t.Run("BindAndReleaseWithReceipt", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		created, actorRef := createActor(t, s)
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		assignment := &ateapi.ActorAssignment{
+			Actor:    &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			ActorUid: created.GetMetadata().GetUid(),
+		}
+		resuming, bound, err := s.BindActorToWorkerWithReceipt(ctx, testWorkerName, assignment, nil, actorRef, store.PreconditionFrom(created), setState(ateapi.ActorState_ACTOR_STATE_RESUMING), newReceipt(ateapi.ActorState_ACTOR_STATE_RESUMING), true)
+		if err != nil {
+			t.Fatalf("BindActorToWorkerWithReceipt failed: %v", err)
+		}
+		if bound.GetState() != ateapi.ActorState_ACTOR_STATE_RESUMING || resuming.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RESUMING {
+			t.Errorf("bind stored receipt state %v and actor state %v, want RESUMING", bound.GetState(), resuming.GetStatus().GetState())
+		}
+
+		// A release under a stale precondition stores nothing.
+		if _, _, _, err := s.UpdateActorAndReleaseWithReceipt(ctx, actorRef, store.PreconditionFrom(created), setState(ateapi.ActorState_ACTOR_STATE_SUSPENDED), newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDED), false); !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("UpdateActorAndReleaseWithReceipt under a stale precondition = %v, want ErrVersionConflict", err)
+		}
+		got, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID)
+		if err != nil {
+			t.Fatalf("GetActorLifecycleReceipt failed: %v", err)
+		}
+		if got.GetState() != ateapi.ActorState_ACTOR_STATE_RESUMING {
+			t.Errorf("receipt after the failed release has state %v, want RESUMING", got.GetState())
+		}
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); err != nil {
+			t.Errorf("GetWorkerAssignment after the failed release = %v, want the assignment kept", err)
+		}
+
+		if _, _, _, err := s.UpdateActorAndReleaseWithReceipt(ctx, actorRef, store.PreconditionFrom(resuming), setState(ateapi.ActorState_ACTOR_STATE_SUSPENDED), newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDED), false); err != nil {
+			t.Fatalf("UpdateActorAndReleaseWithReceipt failed: %v", err)
+		}
+		if got, err = s.GetActorLifecycleReceipt(ctx, actorRef, requestID); err != nil {
+			t.Fatalf("GetActorLifecycleReceipt failed: %v", err)
+		}
+		if got.GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED || !proto.Equal(got.GetCreateTime(), bound.GetCreateTime()) {
+			t.Errorf("receipt after the release = %v, want SUSPENDED with the bind's create_time", got)
+		}
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetWorkerAssignment after the release = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("BindActorToWorkerWithReceipt_FailureStoresNothing", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		created, actorRef := createActor(t, s)
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		if _, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), nil); err != nil {
+			t.Fatalf("UpdateActor failed: %v", err)
+		}
+		assignment := &ateapi.ActorAssignment{
+			Actor:    &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			ActorUid: created.GetMetadata().GetUid(),
+		}
+		if _, _, err := s.BindActorToWorkerWithReceipt(ctx, testWorkerName, assignment, nil, actorRef, store.PreconditionFrom(created), setState(ateapi.ActorState_ACTOR_STATE_RESUMING), newReceipt(ateapi.ActorState_ACTOR_STATE_RESUMING), true); !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("BindActorToWorkerWithReceipt under a stale precondition = %v, want ErrVersionConflict", err)
+		}
+		if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActorLifecycleReceipt after the failed bind = %v, want ErrNotFound", err)
+		}
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetWorkerAssignment after the failed bind = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("LifecycleReceipt_OutlivesActor", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		created, actorRef := createActor(t, s)
+		if _, _, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(created), nil, newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDED), true); err != nil {
+			t.Fatalf("UpdateActorWithReceipt failed: %v", err)
+		}
+		if _, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteActor failed: %v", err)
+		}
+		got, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID)
+		if err != nil {
+			t.Fatalf("GetActorLifecycleReceipt after DeleteActor failed: %v", err)
+		}
+		if got.GetActorUid() != created.GetMetadata().GetUid() {
+			t.Errorf("receipt actor_uid = %q, want the deleted actor's %q", got.GetActorUid(), created.GetMetadata().GetUid())
+		}
+
+		// A replacement under the same name sees the same receipt.
+		replacement, err := s.CreateActor(ctx, newTestSuspendedActor(testAtespace, actorRef.Name))
+		if err != nil {
+			t.Fatalf("CreateActor replacement failed: %v", err)
+		}
+		if _, _, err := s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(replacement), nil, newReceipt(ateapi.ActorState_ACTOR_STATE_SUSPENDED), true); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Errorf("create on the replacement = %v, want ErrAlreadyExists", err)
+		}
+		if _, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteActor replacement failed: %v", err)
+		}
+
+		if _, err := s.DeleteAtespace(ctx, testAtespace, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteAtespace failed: %v", err)
+		}
+		if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, requestID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActorLifecycleReceipt after DeleteAtespace = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+func runActorHoldContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	const holderA, holderB = "user:security-a", "user:security-b"
+	holdReceipt := func(holder, requestID string) func(*ateapi.Actor) *ateapi.LifecycleReceipt {
+		return func(stored *ateapi.Actor) *ateapi.LifecycleReceipt {
+			return &ateapi.LifecycleReceipt{
+				RequestId: requestID,
+				Operation: ateapi.LifecycleOperation_LIFECYCLE_OPERATION_HOLD,
+				Actor:     &ateapi.ObjectRef{Atespace: stored.GetMetadata().GetAtespace(), Name: stored.GetMetadata().GetName()},
+				ActorUid:  stored.GetMetadata().GetUid(),
+				Hold:      &ateapi.ActorHold{Holder: holder, RequestId: requestID, Reason: "incident"},
+			}
+		}
+	}
+	releaseReceipt := func(holder, requestID, holdRequestID string) func(*ateapi.Actor, *ateapi.ActorHold) *ateapi.LifecycleReceipt {
+		return func(stored *ateapi.Actor, released *ateapi.ActorHold) *ateapi.LifecycleReceipt {
+			r := &ateapi.LifecycleReceipt{
+				RequestId: requestID,
+				Operation: ateapi.LifecycleOperation_LIFECYCLE_OPERATION_RELEASE_HOLD,
+				ActorUid:  stored.GetMetadata().GetUid(),
+				Hold:      &ateapi.ActorHold{Holder: holder, RequestId: holdRequestID},
+			}
+			if released != nil {
+				r.Hold, r.Transitioned = released, true
+			}
+			return r
+		}
+	}
+	allow := func(*ateapi.Actor) error { return nil }
+	holders := func(a *ateapi.Actor) []string {
+		var out []string
+		for _, h := range a.GetStatus().GetHolds() {
+			out = append(out, h.GetHolder()+"/"+h.GetRequestId())
+		}
+		return out
+	}
+	createActor := func(t *testing.T, s store.Interface) (*ateapi.Actor, resources.ActorRef) {
+		t.Helper()
+		mustCreateAtespace(t, s, testAtespace)
+		created, err := s.CreateActor(context.Background(), newTestSuspendedActor(testAtespace, "session-1"))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		return created, resources.ActorRefFromActor(created)
+	}
+	mustGet := func(t *testing.T, s store.Interface, ref resources.ActorRef) *ateapi.Actor {
+		t.Helper()
+		a, err := s.GetActor(context.Background(), ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		return a
+	}
+
+	t.Run("PlaceAndRelease", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		created, actorRef := createActor(t, s)
+
+		held, first, err := s.PlaceActorHold(ctx, actorRef, allow, holdReceipt(holderA, "hold-a"))
+		if err != nil {
+			t.Fatalf("PlaceActorHold failed: %v", err)
+		}
+		if got := held.GetMetadata().GetVersion(); got <= created.GetMetadata().GetVersion() {
+			t.Errorf("actor version = %d, want it advanced past %d", got, created.GetMetadata().GetVersion())
+		}
+		if first.GetHold().GetCreateTime() == nil || first.GetCreateTime() == nil {
+			t.Errorf("receipt %v has no create times", first)
+		}
+		if diff := cmp.Diff([]*ateapi.ActorHold{first.GetHold()}, mustGet(t, s, actorRef).GetStatus().GetHolds(), protocmp.Transform()); diff != "" {
+			t.Errorf("status.holds (-want +got):\n%s", diff)
+		}
+		for _, get := range []func() (*ateapi.LifecycleReceipt, error){
+			func() (*ateapi.LifecycleReceipt, error) { return s.GetActorHold(ctx, actorRef, holderA) },
+			func() (*ateapi.LifecycleReceipt, error) { return s.GetActorLifecycleReceipt(ctx, actorRef, "hold-a") },
+		} {
+			if got, err := get(); err != nil {
+				t.Errorf("reading the hold receipt failed: %v", err)
+			} else if diff := cmp.Diff(first, got, protocmp.Transform()); diff != "" {
+				t.Errorf("stored hold receipt (-want +got):\n%s", diff)
+			}
+		}
+
+		// A second hold by the same holder fails and writes nothing.
+		if _, _, err := s.PlaceActorHold(ctx, actorRef, allow, holdReceipt(holderA, "hold-a2")); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Fatalf("second hold by one holder = %v, want ErrAlreadyExists", err)
+		}
+		if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, "hold-a2"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("receipt of the refused hold = %v, want ErrNotFound", err)
+		}
+		// No two holds share a request_id, whoever holds them.
+		if _, _, err := s.PlaceActorHold(ctx, actorRef, allow, holdReceipt(holderB, "hold-a")); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Fatalf("hold reusing another holder's request_id = %v, want ErrAlreadyExists", err)
+		}
+		if _, _, err := s.PlaceActorHold(ctx, actorRef, allow, holdReceipt(holderB, "hold-b")); err != nil {
+			t.Fatalf("PlaceActorHold by a second holder failed: %v", err)
+		}
+		if got, want := holders(mustGet(t, s, actorRef)), []string{holderA + "/hold-a", holderB + "/hold-b"}; !slices.Equal(got, want) {
+			t.Fatalf("holds = %v, want %v", got, want)
+		}
+
+		// A release names the holder and the hold's request: neither another
+		// holder's hold nor another request releases anything.
+		for _, tc := range []struct{ holder, holdRequestID, requestID string }{
+			{holderA, "hold-b", "release-1"},
+			{holderB, "hold-a", "release-2"},
+		} {
+			_, r, err := s.ReleaseActorHold(ctx, actorRef, tc.holder, tc.holdRequestID, allow, releaseReceipt(tc.holder, tc.requestID, tc.holdRequestID))
+			if err != nil {
+				t.Fatalf("ReleaseActorHold(%s, %s) failed: %v", tc.holder, tc.holdRequestID, err)
+			}
+			if r.GetTransitioned() {
+				t.Errorf("ReleaseActorHold(%s, %s) released a hold", tc.holder, tc.holdRequestID)
+			}
+			if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, tc.requestID); err != nil {
+				t.Errorf("receipt of a release that found no hold: %v", err)
+			}
+		}
+		if got := len(mustGet(t, s, actorRef).GetStatus().GetHolds()); got != 2 {
+			t.Fatalf("holds after releases that match nothing = %d, want 2", got)
+		}
+
+		_, released, err := s.ReleaseActorHold(ctx, actorRef, holderA, "hold-a", allow, releaseReceipt(holderA, "release-3", "hold-a"))
+		if err != nil {
+			t.Fatalf("ReleaseActorHold failed: %v", err)
+		}
+		if !released.GetTransitioned() || !proto.Equal(released.GetHold(), first.GetHold()) {
+			t.Errorf("release receipt = %v, want the released hold %v", released, first.GetHold())
+		}
+		if got, want := holders(mustGet(t, s, actorRef)), []string{holderB + "/hold-b"}; !slices.Equal(got, want) {
+			t.Errorf("holds after releasing A = %v, want %v", got, want)
+		}
+		if _, err := s.GetActorHold(ctx, actorRef, holderA); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActorHold after release = %v, want ErrNotFound", err)
+		}
+		// The released hold's receipt is kept from the release, so a retry
+		// of the hold finds it.
+		kept, err := s.GetActorLifecycleReceipt(ctx, actorRef, "hold-a")
+		if err != nil {
+			t.Fatalf("hold receipt after release: %v", err)
+		}
+		if diff := cmp.Diff(first, kept, protocmp.Transform()); diff != "" {
+			t.Errorf("kept hold receipt (-original +got):\n%s", diff)
+		}
+	})
+
+	t.Run("CheckFailureStoresNothing", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		created, actorRef := createActor(t, s)
+		refused := errors.New("check refused")
+		if _, _, err := s.PlaceActorHold(ctx, actorRef, func(*ateapi.Actor) error { return refused }, holdReceipt(holderA, "hold-a")); !errors.Is(err, refused) {
+			t.Fatalf("PlaceActorHold = %v, want %v", err, refused)
+		}
+		if diff := cmp.Diff(created, mustGet(t, s, actorRef), protocmp.Transform()); diff != "" {
+			t.Errorf("actor after a refused hold (-want +got):\n%s", diff)
+		}
+		if _, err := s.GetActorHold(ctx, actorRef, holderA); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActorHold after a refused hold = %v, want ErrNotFound", err)
+		}
+		if _, err := s.GetActorLifecycleReceipt(ctx, actorRef, "hold-a"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("receipt of a refused hold = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("OtherWritesKeepHolds", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		_, actorRef := createActor(t, s)
+		held, r, err := s.PlaceActorHold(ctx, actorRef, allow, holdReceipt(holderA, "hold-a"))
+		if err != nil {
+			t.Fatalf("PlaceActorHold failed: %v", err)
+		}
+		want := []*ateapi.ActorHold{r.GetHold()}
+		// Each write replaces the whole status, as RevertActor and the
+		// upload bookkeeping rewrite parts of it.
+		replaceStatus := func(a *ateapi.Actor) error {
+			a.Status = &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED}
+			return nil
+		}
+		updated, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(held), replaceStatus)
+		if err != nil {
+			t.Fatalf("UpdateActor failed: %v", err)
+		}
+		if diff := cmp.Diff(want, updated.GetStatus().GetHolds(), protocmp.Transform()); diff != "" {
+			t.Errorf("holds after UpdateActor (-want +got):\n%s", diff)
+		}
+		updated, _, err = s.UpdateActorWithReceipt(ctx, actorRef, store.PreconditionFrom(updated), func(a *ateapi.Actor) error {
+			a.Status = nil
+			return nil
+		}, func(stored *ateapi.Actor) *ateapi.LifecycleReceipt {
+			return &ateapi.LifecycleReceipt{RequestId: "suspend-1", ActorUid: stored.GetMetadata().GetUid()}
+		}, true)
+		if err != nil {
+			t.Fatalf("UpdateActorWithReceipt failed: %v", err)
+		}
+		if diff := cmp.Diff(want, updated.GetStatus().GetHolds(), protocmp.Transform()); diff != "" {
+			t.Errorf("holds after UpdateActorWithReceipt (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff(want, mustGet(t, s, actorRef).GetStatus().GetHolds(), protocmp.Transform()); diff != "" {
+			t.Errorf("stored holds (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("DeleteActorRefusedWhileHeld", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		_, actorRef := createActor(t, s)
+		if _, _, err := s.PlaceActorHold(ctx, actorRef, allow, holdReceipt(holderA, "hold-a")); err != nil {
+			t.Fatalf("PlaceActorHold failed: %v", err)
+		}
+		if _, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Fatalf("DeleteActor of a held actor = %v, want ErrFailedPrecondition", err)
+		}
+		mustGet(t, s, actorRef)
+		if _, _, err := s.ReleaseActorHold(ctx, actorRef, holderA, "hold-a", allow, releaseReceipt(holderA, "release-a", "hold-a")); err != nil {
+			t.Fatalf("ReleaseActorHold failed: %v", err)
+		}
+		if _, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteActor after release failed: %v", err)
+		}
+	})
+
+	t.Run("ReplacementIsNotHeld", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		in := newTestSuspendedActor(testAtespace, "session-1")
+		in.Status.Holds = []*ateapi.ActorHold{{Holder: holderA, RequestId: "forged"}}
+		created, err := s.CreateActor(ctx, in)
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		if got := created.GetStatus().GetHolds(); len(got) != 0 {
+			t.Errorf("created actor holds = %v, want none", got)
+		}
+		if got := mustGet(t, s, resources.ActorRefFromActor(created)).GetStatus().GetHolds(); len(got) != 0 {
+			t.Errorf("stored actor holds = %v, want none", got)
+		}
+	})
+
+	quarantineReceipt := func(requestID string) func(*ateapi.Actor) *ateapi.LifecycleReceipt {
+		return func(stored *ateapi.Actor) *ateapi.LifecycleReceipt {
+			r := holdReceipt(store.QuarantineHolder, requestID)(stored)
+			r.Operation = ateapi.LifecycleOperation_LIFECYCLE_OPERATION_QUARANTINE
+			r.Quarantine = &ateapi.ActorQuarantine{RequestId: requestID, Caller: holderA, Reason: "incident"}
+			return r
+		}
+	}
+
+	t.Run("QuarantineHoldSetsStatus", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		_, actorRef := createActor(t, s)
+		held, r, err := s.PlaceActorHold(ctx, actorRef, allow, quarantineReceipt("q-1"))
+		if err != nil {
+			t.Fatalf("PlaceActorHold failed: %v", err)
+		}
+		q := held.GetStatus().GetQuarantine()
+		if q.GetRequestId() != "q-1" || q.GetCaller() != holderA || q.GetCreateTime() == nil {
+			t.Errorf("status.quarantine = %v, want the receipt's quarantine with a create time", q)
+		}
+		// Other writes keep it, as they keep holds.
+		updated, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(held), func(a *ateapi.Actor) error {
+			a.Status = &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateActor failed: %v", err)
+		}
+		if !proto.Equal(updated.GetStatus().GetQuarantine(), q) {
+			t.Errorf("status.quarantine after UpdateActor = %v, want %v", updated.GetStatus().GetQuarantine(), q)
+		}
+
+		// A replaced receipt reaches both the hold row and the receipt, and
+		// releasing the hold keeps the replacement.
+		final := proto.CloneOf(r)
+		final.Steps = []ateapi.QuarantineStep{ateapi.QuarantineStep_QUARANTINE_STEP_HOLD, ateapi.QuarantineStep_QUARANTINE_STEP_SUSPENDED}
+		if err := s.ReplaceActorHoldReceipt(ctx, actorRef, final); err != nil {
+			t.Fatalf("ReplaceActorHoldReceipt failed: %v", err)
+		}
+		for _, get := range []func() (*ateapi.LifecycleReceipt, error){
+			func() (*ateapi.LifecycleReceipt, error) { return s.GetActorHold(ctx, actorRef, store.QuarantineHolder) },
+			func() (*ateapi.LifecycleReceipt, error) { return s.GetActorLifecycleReceipt(ctx, actorRef, "q-1") },
+		} {
+			if got, err := get(); err != nil {
+				t.Errorf("reading the quarantine receipt failed: %v", err)
+			} else if diff := cmp.Diff(final, got, protocmp.Transform()); diff != "" {
+				t.Errorf("stored quarantine receipt (-want +got):\n%s", diff)
+			}
+		}
+
+		released, _, err := s.ReleaseActorHold(ctx, actorRef, store.QuarantineHolder, "q-1", allow, releaseReceipt(store.QuarantineHolder, "release-q", "q-1"))
+		if err != nil {
+			t.Fatalf("ReleaseActorHold failed: %v", err)
+		}
+		if got := released.GetStatus().GetQuarantine(); got != nil {
+			t.Errorf("status.quarantine after release = %v, want none", got)
+		}
+		if got := mustGet(t, s, actorRef).GetStatus(); got.GetQuarantine() != nil || len(got.GetHolds()) != 0 {
+			t.Errorf("stored status after release = %v, want no quarantine or holds", got)
+		}
+		if got, err := s.GetActorLifecycleReceipt(ctx, actorRef, "q-1"); err != nil {
+			t.Errorf("quarantine receipt after release: %v", err)
+		} else if diff := cmp.Diff(final, got, protocmp.Transform()); diff != "" {
+			t.Errorf("kept quarantine receipt (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("ReplacementIsNotQuarantined", func(t *testing.T) {
+		s := setup(t)
+		mustCreateAtespace(t, s, testAtespace)
+		in := newTestSuspendedActor(testAtespace, "session-1")
+		in.Status.Quarantine = &ateapi.ActorQuarantine{RequestId: "forged"}
+		created, err := s.CreateActor(context.Background(), in)
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		if got := mustGet(t, s, resources.ActorRefFromActor(created)).GetStatus().GetQuarantine(); got != nil {
+			t.Errorf("stored actor quarantine = %v, want none", got)
+		}
+	})
 }
 
 func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
@@ -721,6 +1320,75 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		if diff := cmp.Diff(updated, got, protocmp.Transform()); diff != "" {
 			t.Errorf("UpdateActor return does not match stored state (-updated +got):\n%s", diff)
 		}
+	})
+
+	t.Run("UpdateActor_Activation", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		const activation = "01JDQ5W2R3V6Z8B4N7K9M1P0XA"
+		created, err := s.CreateActor(ctx, &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "test-template"},
+			Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+		})
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		actorRef := resources.ActorRefFromActor(created)
+		read := func(op string, want *ateapi.Actor) {
+			t.Helper()
+			got, err := s.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor after %s failed: %v", op, err)
+			}
+			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("GetActor after %s (-want +got):\n%s", op, diff)
+			}
+			list, err := s.ListActors(ctx, testAtespace, store.ListOptions{})
+			if err != nil {
+				t.Fatalf("ListActors after %s failed: %v", op, err)
+			}
+			if len(list.Items) != 1 {
+				t.Fatalf("ListActors after %s returned %d actors, want 1", op, len(list.Items))
+			}
+			if diff := cmp.Diff(want, list.Items[0], protocmp.Transform()); diff != "" {
+				t.Errorf("ListActors after %s (-want +got):\n%s", op, diff)
+			}
+		}
+
+		resuming, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(dbActor *ateapi.Actor) error {
+			dbActor.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING
+			dbActor.Status.WorkerAssignment = &ateapi.WorkerAssignment{Worker: &ateapi.ObjectRef{Name: testWorkerName}}
+			dbActor.Status.ActivationId = activation
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateActor setting the activation failed: %v", err)
+		}
+		if got := resuming.GetStatus().GetActivationId(); got != activation {
+			t.Fatalf("UpdateActor returned activation_id %q, want %q", got, activation)
+		}
+		read("setting the activation", resuming)
+
+		crashed, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(resuming), func(dbActor *ateapi.Actor) error {
+			dbActor.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
+			dbActor.Status.Crash = &ateapi.ActorCrash{Message: "crashed", ActivationId: dbActor.Status.ActivationId}
+			dbActor.Status.WorkerAssignment = nil
+			dbActor.Status.ActivationId = ""
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateActor clearing the activation failed: %v", err)
+		}
+		if got := crashed.GetStatus().GetActivationId(); got != "" {
+			t.Errorf("UpdateActor returned activation_id %q after clearing it", got)
+		}
+		if got := crashed.GetStatus().GetCrash().GetActivationId(); got != activation {
+			t.Errorf("UpdateActor returned crash activation_id %q, want %q", got, activation)
+		}
+		read("clearing the activation", crashed)
 	})
 
 	t.Run("UpdateActor_Conflict", func(t *testing.T) {

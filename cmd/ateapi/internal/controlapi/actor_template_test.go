@@ -282,7 +282,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 				s.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 			})
 			if tt.actorDeleted {
-				if _, err := workflow.DeleteActor(ctx, goldenRef, store.DeletePreconditions{}); err != nil {
+				if _, err := workflow.DeleteActor(ctx, goldenRef, store.DeletePreconditions{}, ""); err != nil {
 					t.Fatal(err)
 				}
 			}

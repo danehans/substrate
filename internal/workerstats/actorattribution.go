@@ -42,10 +42,26 @@ var (
 	_ attributionSource = (*ateworkerpb.TerminateWorkloadRequest)(nil)
 )
 
+// activationSource is implemented by the requests that start an activation,
+// Run and Restore.
+type activationSource interface {
+	GetActivationId() string
+}
+
+var (
+	_ activationSource = (*ateworkerpb.RunWorkloadRequest)(nil)
+	_ activationSource = (*ateworkerpb.RestoreWorkloadRequest)(nil)
+)
+
 // ActorAttributionFromRequest extracts the attribution a worker should retain
 // for the workload req starts: nothing later in the run, checkpoint, or restore
-// paths carries it, and GetWorkloadStats needs it.
+// paths carries it, and GetWorkloadStats needs it. Only Run and Restore carry
+// the activation.
 func ActorAttributionFromRequest(req attributionSource) resources.ActorAttribution {
+	var activationID string
+	if a, ok := req.(activationSource); ok {
+		activationID = a.GetActivationId()
+	}
 	return resources.ActorAttribution{
 		Ref: resources.ActorRef{
 			Atespace: req.GetAtespace(),
@@ -54,5 +70,6 @@ func ActorAttributionFromRequest(req attributionSource) resources.ActorAttributi
 		UID:              req.GetActorUid(),
 		TemplateAtespace: req.GetActorTemplateAtespace(),
 		TemplateName:     req.GetActorTemplateName(),
+		ActivationID:     activationID,
 	}
 }

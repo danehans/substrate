@@ -38,12 +38,15 @@ if (( $# > 1 )); then
 fi
 
 # Compare against the merge base, so a breaking change that landed on main
-# separately is not reported against this branch. When no ref is given, check
-# upstream/main, origin/main, and main, and keep the newest merge base so a
-# stale fork or local main does not win.
+# separately is not reported against this branch. CI supplies the target branch
+# for pull requests and merge groups. Otherwise check upstream/main, origin/main,
+# and main, and keep the newest merge base so a stale fork or local main does not
+# win. An explicit argument takes precedence over the CI target.
 BASELINE=""
 if (( $# == 1 )); then
   BASELINE="$(git merge-base HEAD "$1")"
+elif [[ -n "${PROTO_BREAKING_BASE_REF:-}" ]]; then
+  BASELINE="$(git merge-base HEAD "refs/remotes/origin/${PROTO_BREAKING_BASE_REF#refs/heads/}")"
 else
   for CANDIDATE in upstream/main origin/main main; do
     if ! MB="$(git merge-base HEAD "${CANDIDATE}" 2>/dev/null)"; then

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
@@ -70,6 +71,11 @@ var (
 )
 
 // Interface defines the contract for the persistence layer storing actor state.
+// QuarantineHolder is the holder of the hold QuarantineActor places. Every
+// other holder is "user:" and a principal ID, so no caller of HoldActor or
+// ReleaseActorHold can name it.
+const QuarantineHolder = "quarantine"
+
 type Interface interface {
 	// Stores a new actor in suspended state and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
@@ -105,6 +111,55 @@ type Interface interface {
 	// validation before the write.
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
 
+	// GetActorLifecycleReceipt returns the unexpired receipt stored for
+	// requestID under the Actor name in actorRef. Returns ErrNotFound if there
+	// is none.
+	GetActorLifecycleReceipt(ctx context.Context, actorRef resources.ActorRef, requestID string) (*ateapi.LifecycleReceipt, error)
+
+	// UpdateActorWithReceipt is UpdateActor that also stores a lifecycle
+	// receipt in the same transaction. A nil mutate leaves the actor
+	// unwritten, but precondition must still hold. receipt builds the receipt
+	// from the actor as stored.
+	//
+	// With create, it stores a new receipt, stamped with create_time and an
+	// expire_time LifecycleReceiptRetention later, and returns ErrAlreadyExists
+	// if the request already has an unexpired one. Otherwise it replaces the
+	// stored receipt, keeping its timestamps, and returns ErrVersionConflict if
+	// there is none, for example because it expired.
+	UpdateActorWithReceipt(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error, receipt func(stored *ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.LifecycleReceipt, error)
+
+	// GetActorHold returns the receipt of the HoldActor call that placed
+	// holder's hold on the Actor in actorRef. Returns ErrNotFound if holder
+	// has no hold on it.
+	GetActorHold(ctx context.Context, actorRef resources.ActorRef, holder string) (*ateapi.LifecycleReceipt, error)
+
+	// PlaceActorHold stores the hold that receipt(stored).hold records, in
+	// one transaction with the write that appends it to status.holds and the
+	// receipt, created as UpdateActorWithReceipt creates one. A hold whose
+	// holder is QuarantineHolder also sets status.quarantine to the
+	// receipt's quarantine in the same write. check runs on the locked Actor
+	// first, and its error is returned as it is. Returns ErrNotFound if the
+	// Actor is missing, and ErrAlreadyExists if the holder already has a hold
+	// on it, another hold has the same request_id, or the request already has
+	// a receipt.
+	PlaceActorHold(ctx context.Context, actorRef resources.ActorRef, check func(*ateapi.Actor) error, receipt func(stored *ateapi.Actor) *ateapi.LifecycleReceipt) (*ateapi.Actor, *ateapi.LifecycleReceipt, error)
+
+	// ReleaseActorHold deletes holder's hold on the Actor if its request_id
+	// is holdRequestID, removes it from status.holds, and creates the
+	// receipt, all in one transaction. receipt gets the released hold, or nil
+	// if there was none; the receipt is stored either way. The released
+	// hold's own receipt is kept LifecycleReceiptRetention from the release.
+	// Releasing the QuarantineHolder hold also clears status.quarantine.
+	// check is as for PlaceActorHold.
+	ReleaseActorHold(ctx context.Context, actorRef resources.ActorRef, holder, holdRequestID string, check func(*ateapi.Actor) error, receipt func(stored *ateapi.Actor, released *ateapi.ActorHold) *ateapi.LifecycleReceipt) (*ateapi.Actor, *ateapi.LifecycleReceipt, error)
+
+	// ReplaceActorHoldReceipt replaces the receipt of the hold that r.hold
+	// names, in its actor_holds row if the hold still exists, and the
+	// receipt stored under r.request_id, in one transaction. The stored
+	// receipt is kept LifecycleReceiptRetention from now. r keeps the
+	// create_time and expire_time it carries.
+	ReplaceActorHoldReceipt(ctx context.Context, actorRef resources.ActorRef, r *ateapi.LifecycleReceipt) error
+
 	// MarkActorForDeletion initiates the deletion of an actor. It sets
 	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
 	// update the actor's status. Returns ErrNotFound if missing,
@@ -115,7 +170,7 @@ type Interface interface {
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
 	// missing, ErrUIDConflict/ErrVersionConflict if precondition does not
 	// describe the actor the caller observed, or ErrFailedPrecondition if the
-	// actor's status.worker_assignment is set.
+	// actor's status.worker_assignment is set or the actor has a hold.
 	DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition DeletePreconditions) (*ateapi.Actor, error)
 
 	// Creates the 1:1 policy subresource for an existing Actor.
@@ -314,6 +369,16 @@ type Interface interface {
 	// released Worker, or nil if no Worker held it. Any error leaves both unchanged.
 	UpdateActorAndRelease(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, *ateapi.Worker, error)
 
+	// BindActorToWorkerWithReceipt is BindActorToWorker that also stores a
+	// lifecycle receipt in the same transaction, as UpdateActorWithReceipt
+	// does.
+	BindActorToWorkerWithReceipt(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error, receipt func(stored *ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.LifecycleReceipt, error)
+
+	// UpdateActorAndReleaseWithReceipt is UpdateActorAndRelease that also
+	// stores a lifecycle receipt in the same transaction, as
+	// UpdateActorWithReceipt does.
+	UpdateActorAndReleaseWithReceipt(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error, receipt func(stored *ateapi.Actor) *ateapi.LifecycleReceipt, create bool) (*ateapi.Actor, *ateapi.Worker, *ateapi.LifecycleReceipt, error)
+
 	// GetWorkerAssignment returns a Worker's assignment for actorUID, or
 	// ErrNotFound when the Worker is not hosting that Actor.
 	GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapi.ActorAssignment, error)
@@ -333,6 +398,10 @@ type Interface interface {
 	// Returns ErrLeaseConflict if the lease is already held by another client.
 	AcquireLease(ctx context.Context, key string) (*Lease, error)
 }
+
+// LifecycleReceiptRetention is how long the store keeps a lifecycle receipt
+// after creating it.
+const LifecycleReceiptRetention = 24 * time.Hour
 
 // Precondition guards an update with the uid and version the caller observed:
 // the write lands only if the stored object still matches both. Both fields are

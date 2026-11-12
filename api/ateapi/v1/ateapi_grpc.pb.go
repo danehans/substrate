@@ -33,48 +33,53 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Control_GetActor_FullMethodName                   = "/substrate.ateapi.v1.Control/GetActor"
-	Control_CreateActor_FullMethodName                = "/substrate.ateapi.v1.Control/CreateActor"
-	Control_UpdateActor_FullMethodName                = "/substrate.ateapi.v1.Control/UpdateActor"
-	Control_SuspendActor_FullMethodName               = "/substrate.ateapi.v1.Control/SuspendActor"
-	Control_ResumeActor_FullMethodName                = "/substrate.ateapi.v1.Control/ResumeActor"
-	Control_RevertActor_FullMethodName                = "/substrate.ateapi.v1.Control/RevertActor"
-	Control_DeleteActor_FullMethodName                = "/substrate.ateapi.v1.Control/DeleteActor"
-	Control_GetActorEgressPolicy_FullMethodName       = "/substrate.ateapi.v1.Control/GetActorEgressPolicy"
-	Control_CreateActorEgressPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/CreateActorEgressPolicy"
-	Control_UpdateActorEgressPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/UpdateActorEgressPolicy"
-	Control_DeleteActorEgressPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/DeleteActorEgressPolicy"
-	Control_MintActorJwt_FullMethodName               = "/substrate.ateapi.v1.Control/MintActorJwt"
-	Control_CreateTag_FullMethodName                  = "/substrate.ateapi.v1.Control/CreateTag"
-	Control_GetTag_FullMethodName                     = "/substrate.ateapi.v1.Control/GetTag"
-	Control_ListTags_FullMethodName                   = "/substrate.ateapi.v1.Control/ListTags"
-	Control_UpdateTag_FullMethodName                  = "/substrate.ateapi.v1.Control/UpdateTag"
-	Control_DeleteTag_FullMethodName                  = "/substrate.ateapi.v1.Control/DeleteTag"
-	Control_ListWorkers_FullMethodName                = "/substrate.ateapi.v1.Control/ListWorkers"
-	Control_GetWorker_FullMethodName                  = "/substrate.ateapi.v1.Control/GetWorker"
-	Control_CreateWorker_FullMethodName               = "/substrate.ateapi.v1.Control/CreateWorker"
-	Control_UpdateWorker_FullMethodName               = "/substrate.ateapi.v1.Control/UpdateWorker"
-	Control_DeleteWorker_FullMethodName               = "/substrate.ateapi.v1.Control/DeleteWorker"
-	Control_DrainWorker_FullMethodName                = "/substrate.ateapi.v1.Control/DrainWorker"
-	Control_MarkWorkerAvailable_FullMethodName        = "/substrate.ateapi.v1.Control/MarkWorkerAvailable"
-	Control_MarkWorkerUnavailable_FullMethodName      = "/substrate.ateapi.v1.Control/MarkWorkerUnavailable"
-	Control_ListWorkerActorAssignments_FullMethodName = "/substrate.ateapi.v1.Control/ListWorkerActorAssignments"
-	Control_ListActors_FullMethodName                 = "/substrate.ateapi.v1.Control/ListActors"
-	Control_CreateAtespace_FullMethodName             = "/substrate.ateapi.v1.Control/CreateAtespace"
-	Control_GetAtespace_FullMethodName                = "/substrate.ateapi.v1.Control/GetAtespace"
-	Control_ListAtespaces_FullMethodName              = "/substrate.ateapi.v1.Control/ListAtespaces"
-	Control_DeleteAtespace_FullMethodName             = "/substrate.ateapi.v1.Control/DeleteAtespace"
-	Control_CreateActorTemplate_FullMethodName        = "/substrate.ateapi.v1.Control/CreateActorTemplate"
-	Control_GetActorTemplate_FullMethodName           = "/substrate.ateapi.v1.Control/GetActorTemplate"
-	Control_ListActorTemplates_FullMethodName         = "/substrate.ateapi.v1.Control/ListActorTemplates"
-	Control_DeleteActorTemplate_FullMethodName        = "/substrate.ateapi.v1.Control/DeleteActorTemplate"
-	Control_GetGlobalAccessPolicy_FullMethodName      = "/substrate.ateapi.v1.Control/GetGlobalAccessPolicy"
-	Control_CreateGlobalAccessPolicy_FullMethodName   = "/substrate.ateapi.v1.Control/CreateGlobalAccessPolicy"
-	Control_UpdateGlobalAccessPolicy_FullMethodName   = "/substrate.ateapi.v1.Control/UpdateGlobalAccessPolicy"
-	Control_GetAtespaceAccessPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/GetAtespaceAccessPolicy"
-	Control_CreateAtespaceAccessPolicy_FullMethodName = "/substrate.ateapi.v1.Control/CreateAtespaceAccessPolicy"
-	Control_UpdateAtespaceAccessPolicy_FullMethodName = "/substrate.ateapi.v1.Control/UpdateAtespaceAccessPolicy"
-	Control_DeleteAtespaceAccessPolicy_FullMethodName = "/substrate.ateapi.v1.Control/DeleteAtespaceAccessPolicy"
+	Control_GetActor_FullMethodName                            = "/substrate.ateapi.v1.Control/GetActor"
+	Control_CreateActor_FullMethodName                         = "/substrate.ateapi.v1.Control/CreateActor"
+	Control_UpdateActor_FullMethodName                         = "/substrate.ateapi.v1.Control/UpdateActor"
+	Control_SuspendActor_FullMethodName                        = "/substrate.ateapi.v1.Control/SuspendActor"
+	Control_ResumeActor_FullMethodName                         = "/substrate.ateapi.v1.Control/ResumeActor"
+	Control_RevertActor_FullMethodName                         = "/substrate.ateapi.v1.Control/RevertActor"
+	Control_DeleteActor_FullMethodName                         = "/substrate.ateapi.v1.Control/DeleteActor"
+	Control_HoldActor_FullMethodName                           = "/substrate.ateapi.v1.Control/HoldActor"
+	Control_ReleaseActorHold_FullMethodName                    = "/substrate.ateapi.v1.Control/ReleaseActorHold"
+	Control_QuarantineActor_FullMethodName                     = "/substrate.ateapi.v1.Control/QuarantineActor"
+	Control_ReleaseQuarantine_FullMethodName                   = "/substrate.ateapi.v1.Control/ReleaseQuarantine"
+	Control_GetActorEgressPolicy_FullMethodName                = "/substrate.ateapi.v1.Control/GetActorEgressPolicy"
+	Control_InspectQuarantinedActorEgressPolicy_FullMethodName = "/substrate.ateapi.v1.Control/InspectQuarantinedActorEgressPolicy"
+	Control_CreateActorEgressPolicy_FullMethodName             = "/substrate.ateapi.v1.Control/CreateActorEgressPolicy"
+	Control_UpdateActorEgressPolicy_FullMethodName             = "/substrate.ateapi.v1.Control/UpdateActorEgressPolicy"
+	Control_DeleteActorEgressPolicy_FullMethodName             = "/substrate.ateapi.v1.Control/DeleteActorEgressPolicy"
+	Control_MintActorJwt_FullMethodName                        = "/substrate.ateapi.v1.Control/MintActorJwt"
+	Control_CreateTag_FullMethodName                           = "/substrate.ateapi.v1.Control/CreateTag"
+	Control_GetTag_FullMethodName                              = "/substrate.ateapi.v1.Control/GetTag"
+	Control_ListTags_FullMethodName                            = "/substrate.ateapi.v1.Control/ListTags"
+	Control_UpdateTag_FullMethodName                           = "/substrate.ateapi.v1.Control/UpdateTag"
+	Control_DeleteTag_FullMethodName                           = "/substrate.ateapi.v1.Control/DeleteTag"
+	Control_ListWorkers_FullMethodName                         = "/substrate.ateapi.v1.Control/ListWorkers"
+	Control_GetWorker_FullMethodName                           = "/substrate.ateapi.v1.Control/GetWorker"
+	Control_CreateWorker_FullMethodName                        = "/substrate.ateapi.v1.Control/CreateWorker"
+	Control_UpdateWorker_FullMethodName                        = "/substrate.ateapi.v1.Control/UpdateWorker"
+	Control_DeleteWorker_FullMethodName                        = "/substrate.ateapi.v1.Control/DeleteWorker"
+	Control_DrainWorker_FullMethodName                         = "/substrate.ateapi.v1.Control/DrainWorker"
+	Control_MarkWorkerAvailable_FullMethodName                 = "/substrate.ateapi.v1.Control/MarkWorkerAvailable"
+	Control_MarkWorkerUnavailable_FullMethodName               = "/substrate.ateapi.v1.Control/MarkWorkerUnavailable"
+	Control_ListWorkerActorAssignments_FullMethodName          = "/substrate.ateapi.v1.Control/ListWorkerActorAssignments"
+	Control_ListActors_FullMethodName                          = "/substrate.ateapi.v1.Control/ListActors"
+	Control_CreateAtespace_FullMethodName                      = "/substrate.ateapi.v1.Control/CreateAtespace"
+	Control_GetAtespace_FullMethodName                         = "/substrate.ateapi.v1.Control/GetAtespace"
+	Control_ListAtespaces_FullMethodName                       = "/substrate.ateapi.v1.Control/ListAtespaces"
+	Control_DeleteAtespace_FullMethodName                      = "/substrate.ateapi.v1.Control/DeleteAtespace"
+	Control_CreateActorTemplate_FullMethodName                 = "/substrate.ateapi.v1.Control/CreateActorTemplate"
+	Control_GetActorTemplate_FullMethodName                    = "/substrate.ateapi.v1.Control/GetActorTemplate"
+	Control_ListActorTemplates_FullMethodName                  = "/substrate.ateapi.v1.Control/ListActorTemplates"
+	Control_DeleteActorTemplate_FullMethodName                 = "/substrate.ateapi.v1.Control/DeleteActorTemplate"
+	Control_GetGlobalAccessPolicy_FullMethodName               = "/substrate.ateapi.v1.Control/GetGlobalAccessPolicy"
+	Control_CreateGlobalAccessPolicy_FullMethodName            = "/substrate.ateapi.v1.Control/CreateGlobalAccessPolicy"
+	Control_UpdateGlobalAccessPolicy_FullMethodName            = "/substrate.ateapi.v1.Control/UpdateGlobalAccessPolicy"
+	Control_GetAtespaceAccessPolicy_FullMethodName             = "/substrate.ateapi.v1.Control/GetAtespaceAccessPolicy"
+	Control_CreateAtespaceAccessPolicy_FullMethodName          = "/substrate.ateapi.v1.Control/CreateAtespaceAccessPolicy"
+	Control_UpdateAtespaceAccessPolicy_FullMethodName          = "/substrate.ateapi.v1.Control/UpdateAtespaceAccessPolicy"
+	Control_DeleteAtespaceAccessPolicy_FullMethodName          = "/substrate.ateapi.v1.Control/DeleteAtespaceAccessPolicy"
 )
 
 // ControlClient is the client API for Control service.
@@ -102,8 +107,27 @@ type ControlClient interface {
 	// Delete an actor. A running actor's workload is terminated, its volumes
 	// detached, and its worker released before the record is removed.
 	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
+	// Place the caller's hold on an actor. While the actor has any hold,
+	// ResumeActor and DeleteActor fail with FAILED_PRECONDITION. A hold does not
+	// stop a running actor, or keep it from being suspended or reverted.
+	HoldActor(ctx context.Context, in *HoldActorRequest, opts ...grpc.CallOption) (*HoldActorResponse, error)
+	// Release a hold the caller placed. Releasing does not resume the actor.
+	ReleaseActorHold(ctx context.Context, in *ReleaseActorHoldRequest, opts ...grpc.CallOption) (*ReleaseActorHoldResponse, error)
+	// Quarantine an actor. One write places a hold with the holder
+	// "quarantine" and sets status.quarantine. From then on ateapi refuses to
+	// resume, restore, revert, tag or delete the actor, mints no
+	// worker-for-actor certificate or actor JWT for it, keeps its snapshots,
+	// and fails GetActorEgressPolicy for it. A RUNNING actor is then
+	// suspended at the expected activation. See
+	// docs/guides/actor-quarantine.md.
+	QuarantineActor(ctx context.Context, in *QuarantineActorRequest, opts ...grpc.CallOption) (*QuarantineActorResponse, error)
+	// Release an actor's quarantine. Releasing does not resume the actor.
+	ReleaseQuarantine(ctx context.Context, in *ReleaseQuarantineRequest, opts ...grpc.CallOption) (*ReleaseQuarantineResponse, error)
 	// Get the egress policy resource nested under an Actor.
 	GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
+	// Read the stored policy during an actor quarantine. Only quarantine
+	// administrators may use this RPC; gateways still use GetActorEgressPolicy.
+	InspectQuarantinedActorEgressPolicy(ctx context.Context, in *InspectQuarantinedActorEgressPolicyRequest, opts ...grpc.CallOption) (*InspectQuarantinedActorEgressPolicyResponse, error)
 	// Create the egress policy resource nested under an Actor.
 	CreateActorEgressPolicy(ctx context.Context, in *CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
 	// Replace the egress policy resource nested under an Actor.
@@ -275,10 +299,60 @@ func (c *controlClient) DeleteActor(ctx context.Context, in *DeleteActorRequest,
 	return out, nil
 }
 
+func (c *controlClient) HoldActor(ctx context.Context, in *HoldActorRequest, opts ...grpc.CallOption) (*HoldActorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HoldActorResponse)
+	err := c.cc.Invoke(ctx, Control_HoldActor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ReleaseActorHold(ctx context.Context, in *ReleaseActorHoldRequest, opts ...grpc.CallOption) (*ReleaseActorHoldResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseActorHoldResponse)
+	err := c.cc.Invoke(ctx, Control_ReleaseActorHold_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) QuarantineActor(ctx context.Context, in *QuarantineActorRequest, opts ...grpc.CallOption) (*QuarantineActorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QuarantineActorResponse)
+	err := c.cc.Invoke(ctx, Control_QuarantineActor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ReleaseQuarantine(ctx context.Context, in *ReleaseQuarantineRequest, opts ...grpc.CallOption) (*ReleaseQuarantineResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseQuarantineResponse)
+	err := c.cc.Invoke(ctx, Control_ReleaseQuarantine_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EgressPolicy)
 	err := c.cc.Invoke(ctx, Control_GetActorEgressPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) InspectQuarantinedActorEgressPolicy(ctx context.Context, in *InspectQuarantinedActorEgressPolicyRequest, opts ...grpc.CallOption) (*InspectQuarantinedActorEgressPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InspectQuarantinedActorEgressPolicyResponse)
+	err := c.cc.Invoke(ctx, Control_InspectQuarantinedActorEgressPolicy_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -650,8 +724,27 @@ type ControlServer interface {
 	// Delete an actor. A running actor's workload is terminated, its volumes
 	// detached, and its worker released before the record is removed.
 	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
+	// Place the caller's hold on an actor. While the actor has any hold,
+	// ResumeActor and DeleteActor fail with FAILED_PRECONDITION. A hold does not
+	// stop a running actor, or keep it from being suspended or reverted.
+	HoldActor(context.Context, *HoldActorRequest) (*HoldActorResponse, error)
+	// Release a hold the caller placed. Releasing does not resume the actor.
+	ReleaseActorHold(context.Context, *ReleaseActorHoldRequest) (*ReleaseActorHoldResponse, error)
+	// Quarantine an actor. One write places a hold with the holder
+	// "quarantine" and sets status.quarantine. From then on ateapi refuses to
+	// resume, restore, revert, tag or delete the actor, mints no
+	// worker-for-actor certificate or actor JWT for it, keeps its snapshots,
+	// and fails GetActorEgressPolicy for it. A RUNNING actor is then
+	// suspended at the expected activation. See
+	// docs/guides/actor-quarantine.md.
+	QuarantineActor(context.Context, *QuarantineActorRequest) (*QuarantineActorResponse, error)
+	// Release an actor's quarantine. Releasing does not resume the actor.
+	ReleaseQuarantine(context.Context, *ReleaseQuarantineRequest) (*ReleaseQuarantineResponse, error)
 	// Get the egress policy resource nested under an Actor.
 	GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error)
+	// Read the stored policy during an actor quarantine. Only quarantine
+	// administrators may use this RPC; gateways still use GetActorEgressPolicy.
+	InspectQuarantinedActorEgressPolicy(context.Context, *InspectQuarantinedActorEgressPolicyRequest) (*InspectQuarantinedActorEgressPolicyResponse, error)
 	// Create the egress policy resource nested under an Actor.
 	CreateActorEgressPolicy(context.Context, *CreateActorEgressPolicyRequest) (*EgressPolicy, error)
 	// Replace the egress policy resource nested under an Actor.
@@ -774,8 +867,23 @@ func (UnimplementedControlServer) RevertActor(context.Context, *RevertActorReque
 func (UnimplementedControlServer) DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteActor not implemented")
 }
+func (UnimplementedControlServer) HoldActor(context.Context, *HoldActorRequest) (*HoldActorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method HoldActor not implemented")
+}
+func (UnimplementedControlServer) ReleaseActorHold(context.Context, *ReleaseActorHoldRequest) (*ReleaseActorHoldResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseActorHold not implemented")
+}
+func (UnimplementedControlServer) QuarantineActor(context.Context, *QuarantineActorRequest) (*QuarantineActorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method QuarantineActor not implemented")
+}
+func (UnimplementedControlServer) ReleaseQuarantine(context.Context, *ReleaseQuarantineRequest) (*ReleaseQuarantineResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseQuarantine not implemented")
+}
 func (UnimplementedControlServer) GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActorEgressPolicy not implemented")
+}
+func (UnimplementedControlServer) InspectQuarantinedActorEgressPolicy(context.Context, *InspectQuarantinedActorEgressPolicyRequest) (*InspectQuarantinedActorEgressPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InspectQuarantinedActorEgressPolicy not implemented")
 }
 func (UnimplementedControlServer) CreateActorEgressPolicy(context.Context, *CreateActorEgressPolicyRequest) (*EgressPolicy, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateActorEgressPolicy not implemented")
@@ -1026,6 +1134,78 @@ func _Control_DeleteActor_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_HoldActor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HoldActorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).HoldActor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_HoldActor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).HoldActor(ctx, req.(*HoldActorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ReleaseActorHold_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseActorHoldRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ReleaseActorHold(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ReleaseActorHold_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ReleaseActorHold(ctx, req.(*ReleaseActorHoldRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_QuarantineActor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QuarantineActorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).QuarantineActor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_QuarantineActor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).QuarantineActor(ctx, req.(*QuarantineActorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ReleaseQuarantine_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseQuarantineRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ReleaseQuarantine(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ReleaseQuarantine_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ReleaseQuarantine(ctx, req.(*ReleaseQuarantineRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_GetActorEgressPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetActorEgressPolicyRequest)
 	if err := dec(in); err != nil {
@@ -1040,6 +1220,24 @@ func _Control_GetActorEgressPolicy_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).GetActorEgressPolicy(ctx, req.(*GetActorEgressPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_InspectQuarantinedActorEgressPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InspectQuarantinedActorEgressPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).InspectQuarantinedActorEgressPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_InspectQuarantinedActorEgressPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).InspectQuarantinedActorEgressPolicy(ctx, req.(*InspectQuarantinedActorEgressPolicyRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1692,8 +1890,28 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_DeleteActor_Handler,
 		},
 		{
+			MethodName: "HoldActor",
+			Handler:    _Control_HoldActor_Handler,
+		},
+		{
+			MethodName: "ReleaseActorHold",
+			Handler:    _Control_ReleaseActorHold_Handler,
+		},
+		{
+			MethodName: "QuarantineActor",
+			Handler:    _Control_QuarantineActor_Handler,
+		},
+		{
+			MethodName: "ReleaseQuarantine",
+			Handler:    _Control_ReleaseQuarantine_Handler,
+		},
+		{
 			MethodName: "GetActorEgressPolicy",
 			Handler:    _Control_GetActorEgressPolicy_Handler,
+		},
+		{
+			MethodName: "InspectQuarantinedActorEgressPolicy",
+			Handler:    _Control_InspectQuarantinedActorEgressPolicy_Handler,
 		},
 		{
 			MethodName: "CreateActorEgressPolicy",

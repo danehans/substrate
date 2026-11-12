@@ -54,7 +54,19 @@ func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapi.GetAc
 		return nil, resources.ToAPIError(errs)
 	}
 
-	return s.impl.GetEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	// The egress gateways fetch the policy for each request, TLS handshake
+	// or tunnel, and deny on this error, so a quarantine stops new egress
+	// without waiting for a policy change or cache. Updating the policy
+	// does not lift it.
+	actor, err := s.impl.GetActor(ctx, actorRef)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, fmt.Errorf("while getting Actor %s: %w", actorRef, err)
+	}
+	if err := checkNotQuarantined(actorRef, actor, "egress"); err != nil {
+		return nil, err
+	}
+	return s.impl.GetEgressPolicy(ctx, actorRef)
 }
 
 func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapi.EgressPolicy, error) {
@@ -66,6 +78,25 @@ func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.Ac
 		return nil, fmt.Errorf("while getting Actor egress policy: %w", err)
 	}
 	return policy, nil
+}
+
+func (s *RPCService) InspectQuarantinedActorEgressPolicy(ctx context.Context, req *ateapi.InspectQuarantinedActorEgressPolicyRequest) (*ateapi.InspectQuarantinedActorEgressPolicyResponse, error) {
+	if errs := apivalidation.ValidateInspectQuarantinedActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
+	}
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	actor, err := s.impl.GetActor(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	if actor.GetStatus().GetQuarantine() == nil {
+		return nil, apierror.FailedPrecondition("Actor %s is not quarantined", actorRef)
+	}
+	policy, err := s.impl.GetEgressPolicy(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	return &ateapi.InspectQuarantinedActorEgressPolicyResponse{EgressPolicy: policy}, nil
 }
 
 func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapi.UpdateActorEgressPolicyRequest) (*ateapi.EgressPolicy, error) {
@@ -107,7 +138,11 @@ func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapi.De
 		return nil, resources.ToAPIError(errs)
 	}
 
-	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), toDeletePreconditions(req.GetOptions()))
+	precondition, err := toDeletePreconditions(req.GetOptions())
+	if err != nil {
+		return nil, err
+	}
+	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), precondition)
 }
 
 func (s *ServiceImpl) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.EgressPolicy, error) {

@@ -69,6 +69,19 @@ groups:
           docs/metrics/substrate.yaml. It separates two actors that held the
           same name at different times.
         examples: [8f2a1c4e6b0d47f1]
+      - id: ate.actor.activation
+        stability: development
+        type: string
+        brief: >
+          The ULID of the actor's current activation, ActorStatus.activation_id.
+        note: >
+          Logs and spans only, by the cardinality rule no-actor-identity in
+          docs/metrics/substrate.yaml. Each resume that writes RESUMING mints
+          one, and a resume that finds the actor RESUMING replaces it. It is
+          absent while the actor has no worker assignment. Unlike
+          ate.actor.epoch, the control plane assigns it, so ateapi and the
+          worker records name the same activation.
+        examples: [01JDQ5W2R3V6Z8B4N7K9M1P0XA]
       - id: ate.actor.epoch
         stability: development
         type: int
@@ -167,6 +180,125 @@ groups:
                 No lifecycle operation is running, such as when a running actor
                 crashes because its worker is lost, or the operation is not in
                 this list. This is the default value.
+
+  - id: registry.ate.actor.hold
+    type: attribute_group
+    brief: >
+      A hold on an actor, from HoldActor or ReleaseActorHold. Logs only, by the
+      cardinality rule no-actor-identity in docs/metrics/substrate.yaml: every
+      value but the action comes from a request or its caller.
+    attributes:
+      - id: ate.actor.hold.action
+        stability: development
+        brief: What the call did to the hold.
+        type:
+          members:
+            - id: placed
+              stability: development
+              value: placed
+              brief: HoldActor placed the hold.
+            - id: released
+              stability: development
+              value: released
+              brief: ReleaseActorHold released the hold.
+      - id: ate.actor.hold.holder
+        stability: development
+        type: string
+        brief: The principal that placed the hold, ActorHold.holder.
+        examples: ["user:spiffe://cluster.local/ns/sec/sa/controller"]
+      - id: ate.actor.hold.caller
+        stability: development
+        type: string
+        brief: The authenticated principal that made the call.
+        examples: ["user:spiffe://cluster.local/ns/sec/sa/controller"]
+      - id: ate.actor.hold.reason
+        stability: development
+        type: string
+        brief: The reason HoldActor gave for the hold.
+        examples: [exfiltration attempt blocked by egress policy]
+      - id: ate.actor.hold.incident_id
+        stability: development
+        type: string
+        brief: The incident HoldActor named, if any.
+        examples: [INC-1042]
+      - id: ate.actor.hold.request_id
+        stability: development
+        type: string
+        brief: The request_id of the HoldActor call, which names the hold.
+        examples: [incident-1042/hold]
+      - id: ate.actor.hold.release_request_id
+        stability: development
+        type: string
+        brief: The request_id of the ReleaseActorHold call.
+        examples: [incident-1042/release]
+
+  - id: registry.ate.actor.quarantine
+    type: attribute_group
+    brief: >
+      An actor quarantine, from QuarantineActor or ReleaseQuarantine. Logs
+      only, by the cardinality rule no-actor-identity in
+      docs/metrics/substrate.yaml: every value but the action and the steps
+      comes from a request or its caller.
+    attributes:
+      - id: ate.actor.quarantine.action
+        stability: development
+        brief: What happened to the quarantine.
+        type:
+          members:
+            - id: quarantined
+              stability: development
+              value: quarantined
+              brief: QuarantineActor placed the quarantine.
+            - id: suspended
+              stability: development
+              value: suspended
+              brief: QuarantineActor suspended the activation it quarantined.
+            - id: terminated
+              stability: development
+              value: terminated
+              brief: QuarantineActor terminated the activation after its suspend failed.
+            - id: released
+              stability: development
+              value: released
+              brief: ReleaseQuarantine released the quarantine.
+            - id: resume_refused
+              stability: development
+              value: resume_refused
+              brief: The quarantine refused a resume.
+      - id: ate.actor.quarantine.caller
+        stability: development
+        type: string
+        brief: The authenticated principal that made the call.
+        examples: ["user:spiffe://cluster.local/ns/sec/sa/detector"]
+      - id: ate.actor.quarantine.reason
+        stability: development
+        type: string
+        brief: >
+          The reason of the QuarantineActor or ReleaseQuarantine call; for a
+          refused resume, the quarantine's.
+        examples: [exfiltration attempt blocked by egress policy]
+      - id: ate.actor.quarantine.incident_id
+        stability: development
+        type: string
+        brief: The incident QuarantineActor named, if any.
+        examples: [INC-1042]
+      - id: ate.actor.quarantine.request_id
+        stability: development
+        type: string
+        brief: The request_id of the QuarantineActor call, which names the quarantine.
+        examples: [incident-1042/quarantine]
+      - id: ate.actor.quarantine.release_request_id
+        stability: development
+        type: string
+        brief: The request_id of the ReleaseQuarantine call.
+        examples: [incident-1042/release]
+      - id: ate.actor.quarantine.steps
+        stability: development
+        type: string
+        brief: >
+          The QuarantineStep values in effect, lower case without the
+          QUARANTINE_STEP_ prefix, joined by commas.
+        examples: ["hold,marked,suspended"]
 
   - id: registry.ate.template
     type: attribute_group
