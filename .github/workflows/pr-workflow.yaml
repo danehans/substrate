@@ -136,6 +136,8 @@ jobs:
         path: ${{ env.ARTIFACTS }}
         if-no-files-found: error
     - name: verify
+      env:
+        PROTO_BREAKING_BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}
       run: hack/verify-all.sh
     - name: Save Go build cache
       # Main only, so PRs restore the latest main build rather than each
