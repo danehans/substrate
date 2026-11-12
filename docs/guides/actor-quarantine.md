@@ -82,7 +82,7 @@ atenet caches egress policies for ten seconds; atunnel caches DNS policy for
 five seconds and retains its cached policy if refresh fails. Cached policy
 does not extend a revoked tunnel's capability. Existing worker certificates
 last an hour and renew at 90% of that lifetime. A refused renewal stops
-atunnel's renewal loop and subsequent egress; gateway checks do not wait for
+atunnel's renewal loop and blocks new egress tunnels; gateway checks do not wait for
 certificate expiry. Mint and renewal always carry the activation supplied by
 Run or Restore, and cannot acquire a later activation's identity.
 
