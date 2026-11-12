@@ -259,6 +259,11 @@ jobs:
       run: |
         .github/scripts/release/ghcr-login.sh
         helm registry login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin <<<"${TOKEN}"
+    - name: Set up buildx for registry verification
+      if: github.repository == 'danehans/substrate'
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      with:
+        driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
     # Records the source and base revisions, the patch list and every
     # published digest, read back from the registry, in the draft's notes.
     - name: Draft danehans/substrate release

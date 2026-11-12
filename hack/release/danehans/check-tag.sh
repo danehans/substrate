@@ -27,7 +27,7 @@ set -o errexit -o nounset -o pipefail
   echo "usage: $0 <tag>" >&2
   exit 2
 }
-# shellcheck source=fork.env
+# shellcheck source=hack/release/danehans/fork.env
 source "$(dirname "${BASH_SOURCE[0]}")/fork.env"
 tag="$1"
 base="${BASE_TAG//./\\.}"

@@ -67,6 +67,7 @@ jobs:
             go.mod
             hack/release/danehans/agentgateway.env
             hack/release/danehans/check-gateway-image.sh
+            hack/release/danehans/check-gateway-tag.sh
             hack/release/danehans/install-crane.sh
             hack/release/danehans/registry-tag.sh
           sparse-checkout-cone-mode: false
@@ -116,10 +117,7 @@ jobs:
           sha=$(git -C gateway rev-parse HEAD)
           short_sha=${sha:0:12}
           tag=${IMAGE_TAG:-$short_sha}
-          if [[ ! "$tag" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]]; then
-            echo "::error::Image tag must be 1-128 characters, start with a letter, digit, or underscore, and contain only letters, digits, underscores, periods, or hyphens."
-            exit 1
-          fi
+          selected/hack/release/danehans/check-gateway-tag.sh "$tag"
           {
             echo "sha=$sha"
             echo "short_sha=$short_sha"

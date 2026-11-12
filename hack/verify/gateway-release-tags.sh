@@ -25,14 +25,14 @@ case "$1" in
   digest)
     case "$2" in
       *@sha256:*) printf '%s\n' "${2##*@}" ;;
-      *:v1.0.0-rc1-danehans.test)
+      *:v1.0.1-danehans.999)
         if [[ -f "$MOCK_RELEASE_DIGEST" ]]; then
           cat "$MOCK_RELEASE_DIGEST"
         else
           echo 'MANIFEST_UNKNOWN' >&2
           exit 1
         fi ;;
-      *:6de09be76cf9)
+      *:8400847e8046)
         if [[ -f "$MOCK_SHORT_DIGEST" ]]; then
           cat "$MOCK_SHORT_DIGEST"
         else
@@ -52,10 +52,10 @@ export PATH="$work/bin:$PATH"
 export MOCK_RELEASE_DIGEST="$work/release-digest"
 export MOCK_SHORT_DIGEST="$work/short-digest"
 export MOCK_TAG_CALLS="$work/tag-calls"
-export VERSION=v1.0.0-rc1-danehans.test
+export VERSION=v1.0.1-danehans.999
 export KO_DOCKER_REPO=ghcr.io/danehans/substrate
 export REGISTRY_IMAGE="$KO_DOCKER_REPO/agentgateway"
-export IMAGE_TAG=6de09be76cf9
+export IMAGE_TAG=8400847e8046
 export GITHUB_OUTPUT="$work/output"
 export GITHUB_STEP_SUMMARY="$work/summary"
 digest=$(sed -n 's/^  agentgateway: .*@//p' "$root/charts/substrate/values.yaml")

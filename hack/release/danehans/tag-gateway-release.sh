@@ -19,6 +19,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../../.." && pwd)
 # shellcheck disable=SC1091 # The selected revision is sourced from the checkout.
 source "$here/agentgateway.env"
+"$here/check-tag.sh" "$VERSION"
 
 image="$KO_DOCKER_REPO/agentgateway"
 expected_prefix="$image:${GATEWAY_REVISION:0:12}@"

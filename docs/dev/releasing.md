@@ -18,7 +18,7 @@ Releases should always be made from a release branch, named `release-X.Y`.
 
 1. Tag the tested commit on the intended release branch and push the tag. Both tag pushes and manual runs of the [`release`](../../.github/workflows/release.yaml) workflow check out that tag:
    1. The `images` job runs `ate-setup publish release-images`, which builds every release image for `linux/amd64` and `linux/arm64`, pushes it to `ghcr.io/<owner>/<repository>/<image>:<tag>`, and then checks that every tag names the image just pushed, for both platforms. The ko images and `envoy-dataplane`, built from its Dockerfile with `docker buildx`, all cross-compile for arm64 without emulation.
-   2. In `kagent-dev/substrate`, the `charts` job publishes all three Helm charts after the images succeed. See [Fork Helm charts](#fork-helm-charts).
+   2. In `kagent-dev/substrate`, the `charts` job publishes all four Helm charts after the images succeed. See [Fork Helm charts](#fork-helm-charts).
    3. Once artifact publishing succeeds, the `draft` job builds the `kubectl-ate` binaries with `ate-setup publish release-binaries`, then runs [`hack/release/draft-release.sh`](../../hack/release/draft-release.sh), which creates a draft release, and attaches the binaries to it. The notes cover every change since the previous `vX.Y.Z` release, say where the release images are published and link to the list below, give the command that installs them, give the steps to check and install `kubectl-ate`, and end with a list of committers. A release candidate is marked as a prerelease.
 
    If images, charts, or the binary build fails, no new draft is created. If attaching the binaries fails, the draft exists without them. Either way, fix the cause and run the workflow again from the Actions tab with the tag as input.
@@ -112,7 +112,7 @@ VERSION=v0.3.0 go run ./cmd/ate-setup publish release-binaries
 
 ## Fork Helm charts
 
-The fork publishes `substrate-crds`, `substrate`, and `substrate-podcert` to
+The fork publishes `substrate-crds`, `substrate`, `substrate-podcert`, and `substrate-atelet` to
 `oci://ghcr.io/kagent-dev/substrate/helm`. Their chart version is the release tag
 without `v`; their `appVersion` is the full tag, which selects the matching
 component images. All charts are packaged before any chart is pushed. A failed
@@ -122,15 +122,15 @@ when `overwrite` is set for images.
 
 ## danehans/substrate releases
 
-`danehans/substrate` is an experimental, unqualified downstream. Its releases
+`danehans/substrate` is an experimental, unqualified, development-only downstream. Its releases
 come from `danehans/<base tag>` branches; [`fork.env`](../../hack/release/danehans/fork.env)
 records the base, and [`PATCHES.md`](../../hack/release/danehans/PATCHES.md)
 lists every change with its upstream proposal and replacement condition.
 
-- Tags are `<base tag>-danehans.N`, for example `v1.0.0-rc1-danehans.0`.
+- Tags are `<base tag>-danehans.N`, for example `v1.0.1-danehans.0`.
   [`check-tag.sh`](../../hack/release/danehans/check-tag.sh) refuses any other
   tag before the `images` job publishes anything.
-- The workflow publishes images for `linux/amd64` and `linux/arm64`, the three
+- The workflow publishes images for `linux/amd64` and `linux/arm64`, the four
   charts and `kubectl-ate` under `ghcr.io/danehans/substrate`. The charts default
   `image.repository` to `danehans/substrate`.
 - The `draft` job runs [`hack/release/danehans/draft-release.sh`](../../hack/release/danehans/draft-release.sh)

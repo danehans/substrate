@@ -64,7 +64,7 @@ jobs:
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Label nodes with the installed version
-      run: kubectl label nodes --all ate.dev/substrate-version=${VERSION}
+      run: kubectl label nodes --all "ate.dev/substrate-version=${VERSION}"
     - name: Create install namespace
       run: kubectl create namespace ate-system
     - name: Install observability fixtures

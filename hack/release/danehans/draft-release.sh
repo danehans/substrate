@@ -20,7 +20,7 @@
 #
 # - every release image, which must carry linux/amd64 and linux/arm64 and be
 #   labeled with the tag's commit on every platform;
-# - the three Helm charts, which must select this registry and the tag;
+# - the four Helm charts, which must select this registry and the tag;
 # - every image the charts render by default; third-party images must be
 #   pinned by digest, and the gateway must be built from agentgateway.env;
 # - the kubectl-ate checksums in <binaries dir>.
@@ -49,9 +49,9 @@ bin_dir="$2"
 
 ROOT="$(git rev-parse --show-toplevel)"
 HERE="${ROOT}/hack/release/danehans"
-# shellcheck source=fork.env
+# shellcheck source=hack/release/danehans/fork.env
 source "${HERE}/fork.env"
-# shellcheck source=agentgateway.env
+# shellcheck source=hack/release/danehans/agentgateway.env
 source "${HERE}/agentgateway.env"
 : "${GITHUB_REPOSITORY:?}" "${KO_DOCKER_REPO:?}"
 if [[ "${GITHUB_REPOSITORY}" != "${FORK_REPOSITORY}" ]]; then
@@ -60,9 +60,17 @@ if [[ "${GITHUB_REPOSITORY}" != "${FORK_REPOSITORY}" ]]; then
 fi
 "${HERE}/check-tag.sh" "${tag}"
 registry="${KO_DOCKER_REPO%/}"
+if [[ "${registry}" != "ghcr.io/${FORK_REPOSITORY}" ]]; then
+  echo "error: unexpected downstream registry ${registry}" >&2
+  exit 1
+fi
 version="${tag#v}"
 
 source_sha="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
+if [[ "$(git rev-parse HEAD)" != "${source_sha}" ]]; then
+  echo "error: checkout does not match ${tag}" >&2
+  exit 1
+fi
 if ! git merge-base --is-ancestor "${BASE_REVISION}" "${source_sha}"; then
   echo "error: ${tag} (${source_sha}) does not descend from ${BASE_REPOSITORY}@${BASE_REVISION}" >&2
   exit 1
@@ -95,30 +103,26 @@ inspect() {
   echo "${digest} ${platforms}"
 }
 
-# Release image names, from the allowlists in cmd/ate-setup/internal/images.
-images_go="${ROOT}/cmd/ate-setup/internal/images/images.go"
+# Read the same allowlists ate-setup publishes. The images package tests this
+# script against ReleaseComponents and ReleaseDockerfileImages.
+image_names="$("${HERE}/list-release-images.sh")"
 release_images=()
-while IFS= read -r pkg; do
-  release_images+=("${pkg##*/}")
-done < <(awk '/^var released = \[\]string\{/ {f = 1; next} f && /^\}/ {f = 0} f {gsub(/[",[:space:]]/, ""); if ($0 != "") print}' "${images_go}")
 while IFS= read -r name; do
-  release_images+=("${name}")
-done < <(sed -n 's/^var [A-Za-z]* = DockerfileImage{Name: "\([^"]*\)".*/\1/p' "${images_go}")
-if [[ ${#release_images[@]} -lt 2 ]]; then
-  echo "error: could not read the release image allowlists from ${images_go}" >&2
-  exit 1
-fi
+  [[ -n "${name}" ]] && release_images+=("${name}")
+done <<<"${image_names}"
+[[ ${#release_images[@]} -gt 0 ]] || { echo "error: empty release image set" >&2; exit 1; }
 
 image_rows=""
 for name in "${release_images[@]}"; do
   ref="${registry}/${name}:${tag}"
-  read -r digest platforms < <(inspect "${ref}" "${source_sha}")
+  inspection="$(inspect "${ref}" "${source_sha}")"
+  read -r digest platforms <<<"${inspection}"
   image_rows+="| \`${name}\` | \`${ref}@${digest}\` | ${platforms} |"$'\n'
 done
 
 helm_out="$(mktemp -d "${work}/helm.XXXX")"
 chart_rows=""
-for chart in substrate-crds substrate substrate-podcert; do
+for chart in substrate-crds substrate substrate-podcert substrate-atelet; do
   out="$(helm pull "oci://${registry}/helm/${chart}" --version "${version}" --destination "${helm_out}" 2>&1)"
   digest="$(sed -n 's/^Digest: \(sha256:[0-9a-f]\{64\}\)$/\1/p' <<<"${out}")"
   if [[ -z "${digest}" ]]; then
@@ -136,8 +140,9 @@ done
 # Images the charts deploy by default. Release images are listed above.
 rendered="$(
   {
-    helm template substrate "${helm_out}/substrate-${version}.tgz" --namespace ate-system
-    helm template substrate-podcert "${helm_out}/substrate-podcert-${version}.tgz" --namespace certificate-system
+    helm template substrate "${helm_out}/substrate-${version}.tgz" --namespace ate-system || exit 1
+    helm template substrate-atelet "${helm_out}/substrate-atelet-${version}.tgz" --namespace ate-system || exit 1
+    helm template substrate-podcert "${helm_out}/substrate-podcert-${version}.tgz" --namespace certificate-system || exit 1
   } | sed -n 's/^[[:space:]]*-\{0,1\}[[:space:]]*image:[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}[[:space:]]*$/\1/p' | sort -u
 )"
 gateway_ref="$(helm show values "${helm_out}/substrate-${version}.tgz" | sed -n 's/^  agentgateway: //p')"
@@ -166,21 +171,26 @@ while IFS= read -r ref; do
   fi
   third_party_rows+="| \`${ref}\` |"$'\n'
 done <<<"${rendered}"
-read -r gateway_index gateway_platforms < <(inspect "${gateway_ref}" "${GATEWAY_REVISION}")
+inspection="$(inspect "${gateway_ref}" "${GATEWAY_REVISION}")"
+read -r gateway_index gateway_platforms <<<"${inspection}"
 if [[ "${gateway_ref}" != *"@${gateway_index}" ]]; then
   echo "error: the gateway default ${gateway_ref} does not name its index digest ${gateway_index}" >&2
   exit 1
 fi
 
 checksums=""
-shopt -s nullglob
-sums=("${bin_dir}"/*.sha256)
-shopt -u nullglob
-if [[ ${#sums[@]} -eq 0 ]]; then
-  echo "error: no kubectl-ate checksums in ${bin_dir}" >&2
-  exit 1
-fi
-checksums="$(cat "${sums[@]}")"
+for os in linux darwin; do
+  for arch in amd64 arm64; do
+    name="kubectl-ate-${os}-${arch}"
+    expected="$(cat "${bin_dir}/${name}.sha256")"
+    actual="$(cd "${bin_dir}" && shasum -a 256 "${name}")"
+    if [[ "${actual}" != "${expected}" ]]; then
+      echo "error: checksum mismatch for ${name}" >&2
+      exit 1
+    fi
+    checksums+="${actual}"$'\n'
+  done
+done
 
 # The patch list from PATCHES.md, from its first section on, with headings
 # demoted and its links to files beside it made absolute at the source revision.
@@ -193,7 +203,7 @@ if [[ -z "${patches}" ]]; then
 fi
 
 notes="$(cat <<NOTES
-**Experimental and unqualified.** \`${FORK_REPOSITORY}\` is a downstream of \`${BASE_REPOSITORY}\` \`${BASE_TAG}\`. It is not an upstream release, and no protection or qualification is claimed for it.
+**Experimental, unqualified, and development only.** \`${FORK_REPOSITORY}\` is a downstream of \`${BASE_REPOSITORY}\` \`${BASE_TAG}\`. It is not an upstream release, and no protection or qualification is claimed for it.
 
 ## Source
 
@@ -203,7 +213,8 @@ notes="$(cat <<NOTES
 | Base | [\`${BASE_REPOSITORY}\` \`${BASE_TAG}\`](https://github.com/${BASE_REPOSITORY}/tree/${BASE_REVISION}) | \`${BASE_REVISION}\` |
 | Egress gateway | [\`${GATEWAY_REPOSITORY}\`](https://github.com/${GATEWAY_REPOSITORY}/tree/${GATEWAY_REVISION}) | \`${GATEWAY_REVISION}\` |
 
-Every release image and chart below was built from the release source revision.
+Every release image below carries the release source revision label.
+Chart versions and rendered image references were checked against the release tag.
 
 ## Patches
 
@@ -253,6 +264,7 @@ if [[ "${dry_run}" == true ]]; then
   echo "Dry run: no release created."
   exit 0
 fi
+VERSION="${tag}" "${ROOT}/.github/scripts/release/refuse-published-release.sh"
 if is_draft="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft 2>/dev/null)"; then
   if [[ "${is_draft}" != true ]]; then
     echo "${tag} is published; its notes are left unchanged."

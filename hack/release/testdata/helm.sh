@@ -40,5 +40,6 @@ case "$1" in
     ;;
   registry) cat >/dev/null ;;
   push) test -f "$2" ;;
+  template) test -f "$3" ;;
   *) exit 2 ;;
 esac
