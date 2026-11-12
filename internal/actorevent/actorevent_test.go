@@ -303,6 +303,15 @@ func TestLogWritesOneCopy(t *testing.T) {
 		{"state changed", StateChanged, stateChangedAttrs(ateattr.ActorStateRunning)},
 		{"crashed", Crashed, crashedAttrs()},
 		{"usage sampled", UsageSampled, usageSampledAttrs()},
+		{"quarantine changed", QuarantineChanged, append(ateattr.ActorLogAttrs(testAttribution()),
+			slog.String(string(ateattr.ActorQuarantineActionKey), ateattr.QuarantineActionSuspended),
+			slog.String(string(ateattr.ActorQuarantineRequestIDKey), "quarantine-1"),
+			slog.String(string(ateattr.ActorQuarantineReasonKey), "test containment"),
+			slog.String(string(ateattr.ActorQuarantineCallerKey), "user:detector"),
+			slog.String(string(ateattr.ActorQuarantineIncidentIDKey), "incident-1"),
+			slog.String(string(ateattr.ActorQuarantineStepsKey), "hold,marked,suspended"),
+			slog.String(string(ateattr.ActorActivationKey), "activation-1"),
+			slog.String(string(ateattr.ActorStateKey), ateattr.ActorStateSuspended))},
 	}
 
 	for _, tt := range tests {

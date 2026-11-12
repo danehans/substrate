@@ -46,6 +46,7 @@ import (
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/egresspolicy"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/substratex509"
 )
 
 const (
@@ -93,10 +94,11 @@ func (ca *testCA) loadRoots() (*x509.CertPool, error) {
 	return pool, nil
 }
 
-// actorCertOptions mutates the leaf template so each test can break exactly one
-// property of an otherwise-valid actor certificate.
+// actorCertOptions changes one property of an otherwise-valid actor certificate.
 type actorCertOptions struct {
-	mutate func(*x509.Certificate)
+	mutate       func(*x509.Certificate)
+	activation   string
+	omitIdentity bool
 }
 
 // issueActorCert mints a leaf off ca, mirroring what ateapi's actoridentity
@@ -132,6 +134,17 @@ func (ca *testCA) issueActorCertDER(t *testing.T, spiffeURI string, opts actorCe
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  false,
+	}
+	if !opts.omitIdentity {
+		ref, err := resources.ActorRefFromWorkerForActorSPIFFEURL(spiffeParsed)
+		if err != nil {
+			t.Fatalf("parsing actor identity: %v", err)
+		}
+		if err := substratex509.AddActorIdentityToCertificate(&substratex509.ActorIdentity{
+			Atespace: ref.Atespace, ActorName: ref.Name, ActorUid: testEgressActorUID, ActivationId: opts.activation,
+		}, template); err != nil {
+			t.Fatalf("adding actor identity: %v", err)
+		}
 	}
 
 	if opts.mutate != nil {
@@ -715,10 +728,12 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 
 	tests := []struct {
-		name  string
-		actor *ateapi.Actor
-		err   error
-		want  envoy_type.StatusCode
+		name        string
+		actor       *ateapi.Actor
+		err         error
+		want        envoy_type.StatusCode
+		cert        actorCertOptions
+		beforeState bool
 	}{
 		{
 			name: "actor is suspended",
@@ -733,9 +748,56 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 			want: envoy_type.StatusCode_Forbidden,
 		},
 		{
+			name: "running actor is quarantined",
+			actor: func() *ateapi.Actor {
+				a := runningActor()
+				a.Status.Quarantine = &ateapi.ActorQuarantine{RequestId: "q-1"}
+				return a
+			}(),
+			want: envoy_type.StatusCode_Forbidden,
+		},
+		{
 			name: "actor no longer exists",
 			err:  status.Error(codes.NotFound, "no such actor"),
 			want: envoy_type.StatusCode_Forbidden,
+		},
+		{
+			name:  "replacement actor under the same name",
+			actor: func() *ateapi.Actor { a := runningActor(); a.Metadata.Uid = "replacement-uid"; return a }(),
+			want:  envoy_type.StatusCode_Forbidden,
+		},
+		{
+			name:  "certificate from an earlier activation",
+			actor: func() *ateapi.Actor { a := runningActor(); a.Status.ActivationId = "current-activation"; return a }(),
+			cert:  actorCertOptions{activation: "earlier-activation"},
+			want:  envoy_type.StatusCode_Forbidden,
+		},
+		{
+			name: "suspended actor with cleared activation",
+			actor: func() *ateapi.Actor {
+				a := runningActor()
+				a.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+				return a
+			}(),
+			cert:        actorCertOptions{activation: "earlier-activation"},
+			want:        envoy_type.StatusCode_Forbidden,
+			beforeState: true,
+		},
+		{
+			name:  "certificate without activation",
+			actor: func() *ateapi.Actor { a := runningActor(); a.Status.ActivationId = "current-activation"; return a }(),
+		},
+		{
+			name:  "malformed identity extension",
+			actor: runningActor(),
+			cert:  actorCertOptions{mutate: func(c *x509.Certificate) { c.ExtraExtensions[0].Value = []byte("{") }},
+			want:  envoy_type.StatusCode_Forbidden,
+		},
+		{
+			name:  "missing identity extension",
+			actor: runningActor(),
+			cert:  actorCertOptions{omitIdentity: true},
+			want:  envoy_type.StatusCode_Forbidden,
 		},
 		{
 			name: "control plane unreachable",
@@ -747,9 +809,18 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			h := egressHandler(ca.loadRoots, tc.actor, tc.err)
-			leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", actorCertOptions{})
+			leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/foo/bar", tc.cert)
 			_, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
+			if tc.want == 0 {
+				if err != nil {
+					t.Fatalf("HandleRequestHeaders() error = %v, want nil", err)
+				}
+				return
+			}
 			wantStatus(t, err, tc.want)
+			if tc.beforeState && strings.Contains(err.Error(), "SUSPENDED") {
+				t.Errorf("denial reached actor state before checking certificate: %v", err)
+			}
 		})
 	}
 }

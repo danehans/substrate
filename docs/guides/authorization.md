@@ -143,7 +143,7 @@ integration. `quarantine_admin` also grants releasing quarantines and reading
 the stored egress policy of a quarantined actor. No owner or editor can release
 a quarantine or use that read without the role.
 An owner can still grant it to themselves through an access policy. See
-[actor quarantine](../reference/api-guide.md#actor-quarantine).
+[actor quarantine](actor-quarantine.md).
 
 ### System roles
 
@@ -248,7 +248,7 @@ certificate.
 | `ReportActorCrashed` | `atelet` on the node of the worker hosting the actor |
 | `RequestActorSuspend` | `atelet` on the node of the worker hosting the actor |
 | `MintWorkerActorJwt` | `atelet` on the node hosting the actor |
-| `MintWorkerActorCertificate` | `atelet` on the node of the worker the actor is assigned to |
+| `MintWorkerActorCertificate` | `atelet` on the node of the worker the actor is assigned to, for the actor's current activation |
 | `ReportActorSnapshotState` | `atelet` on the node the actor is placed on |
 
 ### Every RPC

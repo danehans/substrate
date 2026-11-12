@@ -246,6 +246,51 @@ func TestEgressExpiryRejectsNewButPreservesEstablished(t *testing.T) {
 	_ = egress.Deactivate(context.Background(), testActorUID)
 }
 
+// An established tunnel carries bytes until Deactivate, which closes both of
+// its ends. The gateway sees every tunnel, TLS passthrough included, as one
+// CONNECT stream, so a suspend or terminate ends it there too.
+func TestEgressDeactivateClosesEstablishedTunnel(t *testing.T) {
+	upstreamProxy, upstreamGateway := net.Pipe()
+	defer upstreamGateway.Close()
+	dialed := make(chan struct{})
+	dialer := tunnelDialerFunc(func(context.Context, string) (net.Conn, error) {
+		close(dialed)
+		return upstreamProxy, nil
+	})
+	egress, err := New(func(net.Conn) (string, error) { return "192.0.2.10:443", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := egress.Activate(testActorUID, dialer, fakeActorCertificateSource{expiresAt: time.Now().Add(time.Hour)}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	actor, proxy := net.Pipe()
+	defer actor.Close()
+	egress.handle(proxy, egress.active[testActorUID])
+	receiveWithin(t, dialed, "tunnel dial")
+
+	go func() { _, _ = actor.Write([]byte("open")) }()
+	buf := make([]byte, len("open"))
+	if _, err := io.ReadFull(upstreamGateway, buf); err != nil {
+		t.Fatalf("established tunnel carried no bytes: %v", err)
+	}
+
+	if err := egress.Deactivate(context.Background(), testActorUID); err != nil {
+		t.Fatal(err)
+	}
+	// A pipe whose other end is closed fails SetReadDeadline and Read with
+	// io.ErrClosedPipe or io.EOF; an open one would time out instead.
+	for name, end := range map[string]net.Conn{"actor": actor, "gateway": upstreamGateway} {
+		err := end.SetReadDeadline(time.Now().Add(time.Second))
+		if err == nil {
+			_, err = end.Read(make([]byte, 1))
+		}
+		if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
+			t.Errorf("%s end of the tunnel after Deactivate: error = %v, want it closed", name, err)
+		}
+	}
+}
+
 func TestEgressRenewsBeforeExpiry(t *testing.T) {
 	var mints atomic.Int32
 	renewed := make(chan struct{}, 1)

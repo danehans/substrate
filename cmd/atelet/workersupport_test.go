@@ -504,6 +504,7 @@ func TestMintActorCertificateForwardsToWorkerService(t *testing.T) {
 		ActorName:                 "actor-1",
 		ActorUid:                  "01234567-89ab-cdef-0123-456789abcdef",
 		CertificateSigningRequest: []byte("csr-bytes"),
+		ActivationId:              "01JC2Z6N8Q3W9X4Y5Z6A7B8C9D",
 	})
 	if err != nil {
 		t.Fatalf("MintActorCertificate() failed: %v", err)
@@ -518,6 +519,9 @@ func TestMintActorCertificateForwardsToWorkerService(t *testing.T) {
 		},
 		ActorUid:                  "01234567-89ab-cdef-0123-456789abcdef",
 		CertificateSigningRequest: []byte("csr-bytes"),
+		// The activation is forwarded as the worker sent it; the control
+		// plane checks it against the Actor.
+		ActivationId: "01JC2Z6N8Q3W9X4Y5Z6A7B8C9D",
 	}}
 	if diff := cmp.Diff(want, workers.mintGot, protocmp.Transform()); diff != "" {
 		t.Errorf("forwarded mint request mismatch (-want +got):\n%s", diff)
