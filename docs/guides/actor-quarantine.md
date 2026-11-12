@@ -80,10 +80,9 @@ closed or cancel work already accepted by an origin.
 
 The chart gateway uses the source and digest recorded in
 [`agentgateway.env`](../../hack/release/danehans/agentgateway.env) and
-`images.agentgateway`. The current historical image predates the reviewed
-v1.0.1 actor-state alignment and is not the final release candidate. It must
-be replaced with a verified build of the reviewed gateway source before
-combined validation and release; see the [gateway integration status](../../hack/release/danehans/PATCHES.md#gateway-integration).
+`images.agentgateway`. The pinned gateway uses the v1.0.1 actor-state values.
+Source and platform verification do not replace combined runtime qualification;
+see the [gateway integration contract](../../hack/release/danehans/PATCHES.md#gateway-integration).
 
 `atenetEgress.agentgateway.upstreamConnections` selects `perExecution` by
 default. This gives each certificate binding its own upstream connections;

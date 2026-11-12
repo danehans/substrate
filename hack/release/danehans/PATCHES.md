@@ -79,13 +79,11 @@ idle origin-socket retirement or cancel work already accepted upstream.
 
 ## Gateway integration
 
-The chart and `agentgateway.env` still name the historical source
-`8400847e8046669145f287506661219d201a95a2` and its matching image index. That
-pair does not contain the v1.0.1 actor-state alignment in the reviewed gateway
-source `7696eaaf931945d8449012ebb4973d6bf2d4889a`. A fresh image of that source,
-with verified platform manifests and provenance, is required before release.
-The old digest must never be relabeled as that newer source. See the
-[gateway source and artifact contract](https://github.com/danehans/agentgateway/pull/7#issuecomment-6831601211).
+The chart's pinned gateway uses the v1.0.1 actor-state values.
+`agentgateway.env` records its exact source, and `images.agentgateway` selects
+the matching multi-architecture image index. Verify the source provenance and
+both platform manifests whenever this pair changes. An image from a different
+revision must never be relabeled as the selected source.
 
 The chart selects `perExecution` upstream pooling by default; `shared` opts
 into a shared pool. Integrated gateway behavior still requires validation of
