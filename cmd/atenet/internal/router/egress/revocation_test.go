@@ -17,10 +17,12 @@ package egress
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	ateapi "go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/substratex509"
 	"google.golang.org/grpc"
 	"log/slog"
 	"net"
@@ -655,5 +657,57 @@ func TestRevocationPollBeforeNewActivationAdmission(t *testing.T) {
 	<-done
 	if permit(r, fresh).Code != 200 || r.tunnels[old].check != r.tunnels[fresh].check {
 		t.Fatal("older poll revoked fresh admission or split the poll group")
+	}
+}
+
+func TestRevocationLeavesOtherActorAuthorized(t *testing.T) {
+	for _, activation := range []string{"", "activation-1"} {
+		t.Run(activation, func(t *testing.T) {
+			quarantined := runningActor()
+			quarantined.Status.ActivationId = "activation-1"
+			quarantined.Status.Quarantine = &ateapi.ActorQuarantine{RequestId: "q"}
+			api := &revocationAPI{get: func(context.Context) (*ateapi.Actor, error) { return quarantined, nil }}
+			r := newRevocations(api)
+			affected, err := r.admit(revocationCertWithActivation(t, activation), time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ca := newTestCA(t, "other-actor-ca")
+			other := certifiedActor{
+				ref: resources.ActorRef{Atespace: testEgressAtespace, Name: "other-actor"},
+				leaf: ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/default/other-actor", actorCertOptions{
+					omitIdentity: true,
+					mutate: func(cert *x509.Certificate) {
+						if err := substratex509.AddActorIdentityToCertificate(&substratex509.ActorIdentity{
+							Atespace: testEgressAtespace, ActorName: "other-actor", ActorUid: "other-uid", ActivationId: activation,
+						}, cert); err != nil {
+							t.Fatal(err)
+						}
+					},
+				}),
+			}
+			unaffected, err := r.admit(other, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if permit(r, affected).Code != 200 || permit(r, unaffected).Code != 200 {
+				t.Fatal("initial admission failed")
+			}
+			affectedTunnel := r.tunnels[affected]
+			r.check(t.Context(), affectedTunnel.key.actor(), affectedTunnel.check)
+			if permit(r, affected).Code != 403 || permit(r, unaffected).Code != 200 {
+				t.Fatal("quarantine affected the wrong actor")
+			}
+			healthy := runningActor()
+			healthy.Metadata.Name = "other-actor"
+			healthy.Metadata.Uid = "other-uid"
+			healthy.Status.ActivationId = "activation-1"
+			api.get = func(context.Context) (*ateapi.Actor, error) { return healthy, nil }
+			otherTunnel := r.tunnels[unaffected]
+			r.check(t.Context(), otherTunnel.key.actor(), otherTunnel.check)
+			if permit(r, unaffected).Code != 200 || permit(r, affected).Code != 403 {
+				t.Fatal("healthy actor check revived a quarantined tunnel")
+			}
+		})
 	}
 }

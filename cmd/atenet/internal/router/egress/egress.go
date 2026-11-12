@@ -324,8 +324,8 @@ func (h *Handler) validateActor(ctx context.Context, certified certifiedActor, d
 	}
 
 	// A quarantined actor gets no new tunnel, whatever its state. Requests
-	// on tunnels opened before the quarantine use the policy cache until
-	// the quarantine's suspend closes them.
+	// on existing tunnels remain subject to their revocation guards and
+	// native policy checks.
 	if q := actor.GetStatus().GetQuarantine(); q != nil {
 		slog.WarnContext(ctx, "egress denied: actor is quarantined",
 			slog.Any("actor", actorRef), slog.String("quarantine_request_id", q.GetRequestId()), slog.String("destination", destination))

@@ -1,162 +1,128 @@
 # Actor quarantine
 
-Quarantine contains a misbehaving actor in one call and keeps its state for
-investigation. It is built from [actor holds](../reference/api-guide.md#actor-holds):
-a quarantine is a hold with the holder `quarantine`, plus the restrictions
-below. This guide is the supported playbook: what stops at once, what can last
-up to a cache TTL, and what a quarantine does not cover. The API is in
-[Actor quarantine](../reference/api-guide.md#actor-quarantine).
+Quarantine places an [actor hold](../reference/api-guide.md#actor-holds),
+restricts lifecycle and credential operations, and retains snapshots for
+investigation. These downstream controls are experimental, unqualified and
+for development only. See the [API contract](../reference/api-guide.md#actor-quarantine)
+for receipts and retry behavior.
 
 ## Quarantine an actor
 
-Call `QuarantineActor` with:
-
-- `reason`, and optionally `incident_id`;
-- `expected_uid`, so a replacement actor under the same name is never
-  quarantined. Set it: without it, a reused `request_id` returns the earlier
-  actor's receipt for 24 hours, and after that quarantines whichever actor
-  has the name;
-- `expected_activation`, the run you observed misbehaving, if the actor is
-  running;
-- `request_id`, which names the quarantine and makes the call safe to retry.
+Call `QuarantineActor` with `reason`, a stable `request_id`, and optionally
+`incident_id`. Set `expected_uid` to refuse an actor that replaced the one you
+observed. For a running actor, also set `expected_activation` to the observed
+run. Keep those conditions and the request ID unchanged on retries.
 
 The caller needs `can_quarantine`: an editor or owner of the atespace, or the
 `quarantine_manager` or `quarantine_admin` role. See
 [authorization](authorization.md).
 
-ateapi then:
+ateapi atomically places the hold, sets `status.quarantine` and stores a
+receipt. A stale condition fails with `FAILED_PRECONDITION`. If the actor is
+`RUNNING`, ateapi then suspends it under the stable child request ID formed by
+appending `/suspend`. If suspension fails while the activation remains
+assigned, termination fallback discards its memory and releases the worker.
+The receipt records `QUARANTINE_STEP_SUSPENDED` or `QUARANTINE_STEP_TERMINATED`
+when that step succeeds.
 
-1. In one write, places the quarantine hold, sets `status.quarantine` and
-   stores the receipt. A stale `expected_uid` or `expected_activation` fails
-   with `FAILED_PRECONDITION` and changes nothing.
-2. If the actor is `RUNNING`, suspends that activation, with an asynchronous
-   suspend under the `request_id` and `/suspend`, and replaces the receipt
-   with one that adds `QUARANTINE_STEP_SUSPENDED`.
+Termination fallback releases the actor before separately writing the final
+receipt. An interruption between those writes can leave `terminate_pending`;
+a retry then reports `ABORTED` with an unknown outcome. Current actor state
+is not proof that the requested termination succeeded. Unfinished receipts
+can advance; completed retries preserve their recorded result separately
+from later observations.
 
-The receipt's `steps` say what took effect. If the suspend fails, the call
-returns the error, the quarantine stays, and a retry with the same
-`request_id` finishes the suspend.
+## What the quarantine write refuses
 
-## What stops at the quarantine write
+- Resume, delete, revert, and creating a tag from the actor fail with
+  `FAILED_PRECONDITION`, reason `TERMINAL_STATE`, and cause
+  `ACTOR_QUARANTINED`. Ingress cannot resume the actor through these calls.
+- `MintWorkerActorCertificate`, `MintActorJwt`, and the ordinary
+  `GetActorEgressPolicy` call are refused. Existing certificates are not
+  removed from clients.
+- New atenet CONNECT tunnels are refused after a current actor read, even if
+  the actor still reports `RUNNING`. Admission checks the signed actor UID
+  and, when present, the signed activation before checking quarantine.
+- Replaced snapshots remain in object storage rather than being collected.
 
-- **Resume, from every caller.** `ResumeActor` fails with
-  `FAILED_PRECONDITION`, `ErrorInfo` reason `TERMINAL_STATE` and cause
-  `ACTOR_QUARANTINED`, whether the actor is suspended or running. This
-  includes restores, the template reconciler and both ingress routers, which
-  return the error at once instead of parking the request. atenet-router asks
-  ateapi on every request, so its new requests are refused at once.
-- **Delete, revert and tag.** `DeleteActor`, `RevertActor` and `CreateTag`
-  fail the same way, so the snapshots can't be deleted, rolled back or copied
-  for another actor to restore.
-- **Snapshot collection.** A suspend that replaces a quarantined actor's
-  snapshot keeps the replaced one in object storage.
-- **New credentials.** `MintWorkerActorCertificate` and `MintActorJwt`, the
-  actor JWT the egress gateway injects, are refused. The certificate the
-  worker already holds stays valid; see below.
-- **New egress through the chart's agentgateway.** `GetActorEgressPolicy`
-  fails with `FAILED_PRECONDITION` for every caller. agentgateway fetches the
-  policy for every HTTP request and TLS handshake in a tunnel, with no cache,
-  and denies on that error. This holds for tunnels opened before the
-  quarantine, and for TLS passthrough, whose handshake is checked.
-- **New egress tunnels through atenet**, the kustomize gateway. It reads the
-  actor for every new tunnel and refuses a quarantined one. It also compares
-  the verified worker certificate's actor UID and, when present, activation
-  with the current Actor. An old certificate cannot open a tunnel after a
-  same-name replacement or a new activation.
+An editor can still update the egress policy without releasing quarantine.
+`UpdateActorEgressPolicy` needs its `uid` and `version`, obtained before
+quarantine or through `InspectQuarantinedActorEgressPolicy` by a
+`quarantine_admin`. Inspect grants no network access.
 
-An update to the actor's egress policy is stored but does not lift any of
-this: the policy stays unreadable until the quarantine is released. An update
-needs the policy's `uid` and `version`, which a read can't return while the
-actor is quarantined, so use the values read before the quarantine, or update
-the policy after the release.
+## Existing connections
 
-## What stops when the suspend finishes
+Suspension or termination tears down the workload. atunnel closes its egress
+tunnels, including TLS passthrough, and cancels in-flight ingress requests.
 
-The suspend tears down the workload. atunnel closes every egress tunnel,
-including TLS passthrough ones, and cancels in-flight ingress requests. The
-actor is then `SUSPENDED`, and both gateways refuse new tunnels from it.
-This is the only step that closes connections that are already open.
+The downstream Envoy configuration also pairs an outer CONNECT guard with
+network guards in every internal egress chain. They remain active during
+listener inspection, incomplete TLS handshakes and established traffic.
+The guards use an opaque per-CONNECT capability created from the verified
+certificate, never an actor-supplied identity header. They poll through the
+pod-local atenet listener and close on quarantine, UID replacement, failed or
+overdue actor checks, or a mismatch with a certified activation.
 
-## What can last up to a TTL
+A certificate without an activation remains bound only to its UID. Its
+binding is never filled from current actor state, and activation rotation
+alone does not revoke it. Ordinary holds do not revoke tunnels. Release can
+admit a fresh CONNECT; it never reopens an old revoked capability.
 
-Until the suspend finishes:
+Actor checks are shared per certified actor UID on each replica. A check has
+a two-second deadline and a maximum five-second polling interval. Guards
+fail closed when the seven-second freshness budget expires, including during
+control-plane outages. The eight-second end-to-end closure budget is an
+unqualified target under load. See the [Envoy module contract](../../cmd/dataplane/envoy/dynamic-modules/egress-policy/README.md#tunnel-revocation).
+Closing a tunnel does not establish that idle pooled origin sockets have
+closed or cancel work already accepted by an origin.
 
-- agentgateway caches an actor's worker assignment for 5 seconds, so an
-  ingress request can still reach a running actor for that long.
-- atenet caches egress policies for 10 seconds. Requests in tunnels opened
-  before the quarantine use the cached policy for that long.
-- atunnel caches the policy it resolves DNS with for 5 seconds, and keeps the
-  cached one if a refresh fails.
-- Bytes on open tunnels, including TLS passthrough, keep flowing.
-- The worker keeps its certificate, which lasts an hour and is renewed at 90%
-  of that. The refused renewal ends atunnel's renewals, and atunnel then
-  refuses new egress itself, so on the certificate alone that can take up to
-  about 54 minutes. The gateways' refusals above don't depend on it.
+## Caches and lifecycle limits
 
-If the actor was not `RUNNING`, there is nothing to suspend. A `SUSPENDED`
-actor has no workload or open connections. A `RESUMING` actor's restore is
-stopped by the hold, which terminates the restored workload. A `SUSPENDING`
-actor is left to the suspend already under way, and a retry of the quarantine
-does not retry that suspend: retry `SuspendActor` with its own `request_id`
-if it is stuck. A `REVERTING` actor can't be quarantined until the revert
-finishes, because a revert discards snapshots; retry the call.
+atenet caches egress policies for ten seconds; atunnel caches DNS policy for
+five seconds and retains its cached policy if refresh fails. Cached policy
+does not extend a revoked tunnel's capability. Existing worker certificates
+last an hour and renew at 90% of that lifetime. A refused renewal stops
+atunnel's renewal loop and subsequent egress; gateway checks do not wait for
+certificate expiry. Mint and renewal always carry the activation supplied by
+Run or Restore, and cannot acquire a later activation's identity.
 
-If the suspend fails, the quarantine stays in place but open connections stay
-open until the workload stops. Retry the call. A retry continues the suspend
-only while the quarantine is in place, so it never suspends the actor after
-the release.
+A `RESUMING` actor's finalization checks the hold and terminates the restored
+workload. A `SUSPENDING` actor continues its existing suspend; retry that
+operation with its own request ID if it is stuck. A `REVERTING` actor cannot
+be quarantined until the revert finishes.
 
-## Evidence
+Conditional control-plane checks do not fence every worker effect. Worker
+crash/suspend notifications and atelet Checkpoint/Terminate lack activation
+identity. Delayed messages can affect a later activation on the same worker;
+the suspend authorization-to-workflow race also remains. Certificate binding
+and network revocation do not repair those lifecycle paths. Mixed patched
+and unpatched writers and rollback are unqualified; unpatched writers can
+discard quarantine/activation state or bypass restrictions.
 
-While quarantined, the actor's snapshots are kept: nothing restores, reverts,
-tags, deletes or collects them. One race remains: a `CreateTag` that checked
-the actor before the quarantine landed finishes its copy. An asynchronous suspend finishes uploading in
-the background; the worker still gets the credentials it needs for the
-upload. The receipt's `snapshot_durable` says whether the snapshot was durable
-when the suspend finished. Snapshots a suspend replaced stay in object
-storage under the actor's prefix, no longer listed in `status.snapshots`,
-until the actor is deleted after the release.
+## Evidence and release
 
-There is no export or forensics restore yet. To inspect a snapshot, copy it
-from object storage with your own credentials into an environment with no
-egress.
+The receipt's `snapshot_durable` describes durability at the recorded step,
+not a later upload observation. Replaced snapshots stay under the actor's
+object-store prefix until deletion after release. A `CreateTag` already
+past its quarantine check can still finish its copy. There is no snapshot
+export or isolated forensic restore API.
 
-## Release
+Each quarantine, completed suspend or terminate, release, and refused resume
+writes `ate.actor.quarantine_changed` with caller, reason, incident ID,
+request ID, UID, activation and steps. The configured log exporters determine
+whether events appear locally, at an OTLP collector, or both. Envoy guards
+emit `connect_revocation` with the frozen identity and reason, without the
+capability. See the [event registry](../metrics/registry/events.yaml).
 
-`ReleaseQuarantine` names the quarantine by its `request_id`, is idempotent,
-and is audited. It needs `can_release_quarantine`, which only the
-`quarantine_admin` role grants. Neither the caller that placed the quarantine
-nor the actor's editors and owners can release it without that role, and
-`ReleaseActorHold` can't remove the quarantine hold. An owner can grant
-themselves `quarantine_admin` through an access policy, so keep owner rights
-as narrow as release rights.
+`ReleaseQuarantine` names the original quarantine request ID and requires
+`quarantine_admin`. It does not resume the actor. The next routed request or
+explicit resume can restore it under a new activation. After termination
+fallback, that restore uses the last completed durable snapshot, or starts
+from the template if none exists. Revert or delete after release if the
+retained state must not run again. Owners can grant themselves the release
+role, so restrict owner rights accordingly.
 
-Releasing does not resume the actor, but it lifts the barrier: the next
-routed request or other resume restores it. Its snapshots may still hold the
-state that caused the quarantine, so revert or delete the actor if it must
-not run that state again.
-
-## Audit
-
-Each quarantine, each suspend it finishes, each release, and each resume a
-quarantine refuses writes an `ate.actor.quarantine_changed` event with the
-caller, reason, incident ID, request ID, uid, the activation the quarantine
-found, and the steps in effect. See `docs/metrics/registry/events.yaml`.
-A routed request to a quarantined actor writes one refused-resume event, so
-the stream grows with ingress traffic to it.
-
-## Out of scope
-
-- Closing open connections without a suspend. That needs an agentgateway
-  change to end tunnels when an actor is quarantined.
-- agentgateway reading `status.quarantine` itself. It denies through the
-  egress policy fetch instead, and still admits a tunnel from a running
-  quarantined actor before denying the requests in it.
-- Cancelling upstream work that was already forwarded.
-- Quarantining every actor of a template or an atespace.
-- Exporting snapshots, or restoring one into an isolated environment.
-- `kubectl ate` commands.
-- A compromised node, worker or control plane.
-- Mixed versions. Every ateapi replica must run this patch before a client
-  quarantines an actor. A replica without it resumes, deletes and serves
-  egress for the actor.
+Quarantine does not cover a compromised node, worker or control plane,
+template-wide or atespace-wide containment, or cancellation of upstream work
+already forwarded. Gateway integration and deployed gVisor/microVM behavior
+require qualification of the selected build and configuration.
