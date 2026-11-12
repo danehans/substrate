@@ -5836,11 +5836,19 @@ func (x *ResumeActorResponse) GetReceipt() *LifecycleReceipt {
 // request_id did, or what a HoldActor, ReleaseActorHold, QuarantineActor or
 // ReleaseQuarantine call did.
 //
-// ateapi stores the receipt in the write that commits the call's transition,
-// keyed by the atespace, the Actor name and request_id. A later call with the
-// same key returns the stored receipt and does nothing else, even if the
-// Actor has since moved to another activation or been replaced. A call that
-// reuses the key with a different operation, expected_uid,
+// ateapi keys the receipt by the atespace, the Actor name and request_id.
+// Resume and suspend transitions, hold placement and release, and quarantine
+// placement and release store their receipts in the same transaction as the
+// Actor change. Quarantine completion updates its receipt separately: its
+// termination fallback can commit the Actor's suspension and worker release
+// before storing the final receipt. If that receipt cannot be stored, a retry
+// reports ABORTED with an unknown outcome and keeps terminate_pending rather
+// than claiming termination succeeded.
+//
+// Once the operation is complete, a later call with the same key returns the
+// stored receipt and does nothing else, even if the Actor has since moved to
+// another activation or been replaced. A call that reuses the key with a
+// different operation, expected_uid,
 // expected_activation or durability mode fails with ALREADY_EXISTS, and so
 // does a hold or release from another caller, or with another reason,
 // incident_id or hold_request_id.
@@ -5849,6 +5857,10 @@ func (x *ResumeActorResponse) GetReceipt() *LifecycleReceipt {
 // transition and did not finish. A retry continues it only while the Actor
 // is still in that state under the same uid and activation, and otherwise
 // returns the receipt as it is.
+//
+// An unfinished receipt can advance as its operation progresses; ateapi does
+// not retain every intermediate version. Later observations, such as an
+// asynchronous snapshot upload finishing, do not rewrite the completed result.
 //
 // ateapi keeps a receipt for 24 hours after it is created, including after
 // the Actor is deleted. A HoldActor or QuarantineActor receipt is also kept
