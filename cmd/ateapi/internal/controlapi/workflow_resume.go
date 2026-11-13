@@ -191,10 +191,10 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 
 // terminateHeldRestore stops any workload restored for a held RESUMING actor.
 // The actor stays RESUMING until the last hold is released; a resume after
-// that restores it again under a new activation. Every resume the hold
+// that restores it again under a new activation. Every matching resume the hold
 // refuses tries again, so a failure here is only logged.
 func (w *ActorWorkflow) terminateHeldRestore(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) {
-	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationResume); err != nil {
+	if err := w.terminateAtelet(ctx, actorRef, actor, actorTemplate, ateattr.OperationResume, false, true); err != nil {
 		slog.ErrorContext(ctx, "Failed to terminate the workload restored for a held actor",
 			slog.Any("actor", actorRef), slog.Any("err", err))
 	}

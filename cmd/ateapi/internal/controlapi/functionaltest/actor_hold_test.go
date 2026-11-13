@@ -422,9 +422,13 @@ func TestActorHold_DuringRestore(t *testing.T) {
 	wantHeld(t, err)
 	f.tc.fakeAtelet.Lock.Lock()
 	terminated := f.tc.fakeAtelet.TerminateCalled
+	preserved := f.tc.fakeAtelet.PreserveSnapshots
 	f.tc.fakeAtelet.Lock.Unlock()
 	if !terminated {
 		t.Errorf("a refused resume of a held RESUMING Actor did not terminate its workload")
+	}
+	if !preserved {
+		t.Error("held cleanup discarded the snapshot needed after release")
 	}
 
 	f.mustRelease(securityA, "hold-1", "release-1")

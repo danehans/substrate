@@ -114,7 +114,7 @@ type Store interface {
 // detach in progress, and its report due. The RPC waits for the operation to
 // end as it begins (BeginStart, BeginCheckpoint, BeginPromote, or Detach),
 // cancels it and waits for it to stop, or leaves it alone (-). A Checkpoint or
-// PromoteSnapshot cancels once it commits its snapshot, and Terminate cancels
+// PromoteSnapshot cancels once it commits its snapshot, and deleting Terminate cancels
 // in Forget, once the workload is gone. A canceled report is neither sent nor
 // retried, though an attempt under way finishes.
 //
@@ -129,6 +129,8 @@ type Store interface {
 //	                                                              detach makes
 //	                                                              one due
 //	Terminate             cancels             cancels             cancels
+//	Terminate preserving  -                   waits               -
+//	  snapshots
 //
 // The second table shows whether an upload, detach, or report of the actor
 // that comes due while an RPC or background work of the actor runs begins, or
@@ -141,6 +143,8 @@ type Store interface {
 //	immediate Checkpoint  waits               waits               waits
 //	PromoteSnapshot       waits               waits               waits
 //	Terminate             waits               waits               waits
+//	Terminate preserving  begins              waits               waits
+//	  snapshots
 //	upload or detach      waits               waits               begins
 //	report                begins              begins              waits
 type Tracker struct {

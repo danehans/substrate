@@ -1155,6 +1155,7 @@ type capturingAtelet struct {
 	detachErr   error
 	// onDetach, when set, runs before DetachActor returns.
 	onDetach     func()
+	terminate    *ateletpb.TerminateRequest
 	terminateErr error
 	onTerminate  func()
 }
@@ -1221,6 +1222,7 @@ func (f *capturingAtelet) DetachActor(ctx context.Context, req *ateletpb.DetachA
 
 func (f *capturingAtelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
 	f.mu.Lock()
+	f.terminate = proto.CloneOf(req)
 	hook := f.onTerminate
 	f.mu.Unlock()
 	if hook != nil {

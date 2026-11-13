@@ -553,6 +553,13 @@ message TerminateRequest {
   //
   // +k8s:optional
   WorkloadSpec spec = 7;
+
+  // Stop a workload restored for a held actor without discarding its snapshots.
+  // Local checkpoints and background uploads remain available for a later resume.
+  // False retains ordinary termination's cancellation and node-state cleanup.
+  //
+  // +k8s:optional
+  bool preserve_snapshots = 8;
 }
 
 message TerminateResponse {

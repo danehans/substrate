@@ -2912,6 +2912,8 @@ type gatingTrackerStore struct {
 	// upload still waits for release before it returns, as an object-store
 	// call that is finishing would.
 	canceled chan struct{}
+	// uploaded, if set, signals that the gated store call finished.
+	uploaded chan struct{}
 }
 
 func (s *gatingTrackerStore) UploadLocalSnapshot(ctx context.Context, actorUID string, ref snapshottracker.SnapshotRef) (bool, error) {
@@ -2926,6 +2928,9 @@ func (s *gatingTrackerStore) UploadLocalSnapshot(ctx context.Context, actorUID s
 		return false, ctx.Err()
 	}
 	uploaded, err := s.inner.UploadLocalSnapshot(ctx, actorUID, ref)
+	if s.uploaded != nil {
+		s.uploaded <- struct{}{}
+	}
 	if s.objects == nil {
 		return uploaded, err
 	}
