@@ -100,16 +100,16 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 
 // ensureAteletTerminated calls atelet to terminate the workload for opName.
 func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string) error {
-	return w.terminateAtelet(ctx, actorRef, actor, actorTemplate, opName, false)
+	return w.terminateAtelet(ctx, actorRef, actor, actorTemplate, opName, false, false)
 }
 
 // ensureAteletTerminatedForQuarantine requires an atelet response. A missing
 // Node object does not prove that its workload or tunnels have stopped.
 func (w *ActorWorkflow) ensureAteletTerminatedForQuarantine(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) error {
-	return w.terminateAtelet(ctx, actorRef, actor, actorTemplate, ateattr.OperationSuspend, true)
+	return w.terminateAtelet(ctx, actorRef, actor, actorTemplate, ateattr.OperationSuspend, true, false)
 }
 
-func (w *ActorWorkflow) terminateAtelet(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string, requireResponse bool) (err error) {
+func (w *ActorWorkflow) terminateAtelet(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string, requireResponse, preserveSnapshots bool) (err error) {
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
@@ -174,6 +174,7 @@ func (w *ActorWorkflow) terminateAtelet(ctx context.Context, actorRef resources.
 		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 		ActorTemplateName:     actor.GetActorTemplate().GetName(),
 		Spec:                  workloadSpec,
+		PreserveSnapshots:     preserveSnapshots,
 	}
 
 	if _, err := client.Terminate(ctx, req); err != nil {

@@ -195,6 +195,8 @@ func (t *Tracker) CommitPromoted(actorUID string, snap SnapshotRef) *ateletpb.Ac
 //
 // When it cannot save the start, it fails with Unavailable, and the caller
 // must not start the actor.
+// Held-restore termination uses the same guard to keep snapshots and uploads
+// while stopping the workload; its next resume still needs that local state.
 func (t *Tracker) BeginStart(ctx context.Context, actorUID string) (end func(), err error) {
 	t.lock(actorUID)
 	defer t.unlock(actorUID)

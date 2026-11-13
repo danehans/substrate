@@ -2054,7 +2054,8 @@ func endsRestoreFailureStreak(err error) bool {
 }
 
 // Terminate terminates any running workload on worker, unmounts external volumes,
-// and resets actor directories on the node.
+// and resets actor directories on the node. Held-restore cleanup keeps snapshots
+// and their background uploads for a later resume.
 func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
 	if errs := apivalidation.ValidateTerminateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
@@ -2068,9 +2069,18 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 		return nil, err
 	}
 	defer unlockActor()
-	// No background work on the actor starts while it is being terminated.
-	// Forget below cancels an upload or detach already in progress.
-	endTerminate := s.snapshots.BeginTerminate(actorUID)
+	var endTerminate func()
+	if req.GetPreserveSnapshots() {
+		// Like Restore, retain the local copy and wait out any detach before
+		// touching directories. An upload can keep reading its checkpoint.
+		endTerminate, err = s.snapshots.BeginStart(ctx, actorUID)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Forget below cancels and joins any background operation.
+		endTerminate = s.snapshots.BeginTerminate(actorUID)
+	}
 	defer endTerminate()
 
 	if err := s.terminateWorkloadOnWorker(ctx, req, actorRef, actorUID); err != nil {
@@ -2083,6 +2093,14 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 	// Unmount external volumes
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
 		return nil, fmt.Errorf("failed to unmount external volumes during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	}
+
+	if req.GetPreserveSnapshots() {
+		if err := actordirs.ResetActorDirs(actorUID); err != nil {
+			return nil, fmt.Errorf("failed to reset actor directories during held cleanup (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+		s.restoreFailures.reset(actorUID)
+		return &ateletpb.TerminateResponse{}, nil
 	}
 
 	// The actor is gone, so no local snapshot of it can ever be restored again.

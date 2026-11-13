@@ -20,7 +20,11 @@ names its upstream proposal and the condition that retires it.
 2. **Holds and quarantine.** Holder-scoped holds prevent resume. Quarantine
    atomically records its hold, state and receipt, then suspends a running
    activation or falls back to termination. Inspect grants quarantine admins
-   access to stored native policy without granting network access. Termination
+   access to stored native policy without granting network access. Held-restore
+   cleanup preserves local snapshots and uploads through the internal atelet
+   `preserve_snapshots` termination field. This downstream protocol extension
+   requires homogeneous patched components; pending asynchronous snapshots
+   remain vulnerable to node loss. Termination
    fallback releases the actor before separately finalizing its receipt; an
    interruption can leave an unknown pending outcome. See the
    [quarantine contract](../../../docs/guides/actor-quarantine.md).

@@ -112,13 +112,20 @@ func TestResumeActor_HeldRestoreConditions(t *testing.T) {
 					wantTerminations = 0
 				}
 				var terminations atomic.Int32
-				w.dialer = newNodeAteletDialer(t, &capturingAtelet{onTerminate: func() { terminations.Add(1) }})
+				atelet := &capturingAtelet{onTerminate: func() { terminations.Add(1) }}
+				w.dialer = newNodeAteletDialer(t, atelet)
 				_, _, receipt, err := w.ResumeActor(ctx, ref, cond)
 				if apierror.Code(err) != codes.FailedPrecondition {
 					t.Fatalf("ResumeActor: %v, want FailedPrecondition", err)
 				}
 				if got := terminations.Load(); got != wantTerminations {
 					t.Errorf("Terminate calls = %d, want %d", got, wantTerminations)
+				}
+				atelet.mu.Lock()
+				preserved := atelet.terminate.GetPreserveSnapshots()
+				atelet.mu.Unlock()
+				if preserved != (wantTerminations != 0) {
+					t.Errorf("preserve_snapshots = %v, want %v", preserved, wantTerminations != 0)
 				}
 				if diff := cmp.Diff(held, mustReadActor(t, ctx, st, ref), protocmp.Transform()); diff != "" {
 					t.Errorf("refused resume changed the actor (-before +after):\n%s", diff)

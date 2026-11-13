@@ -1925,9 +1925,15 @@ type TerminateRequest struct {
 	// actors with a fallback spec.
 	//
 	// +k8s:optional
-	Spec          *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	// Stop a workload restored for a held actor without discarding its snapshots.
+	// Local checkpoints and background uploads remain available for a later resume.
+	// False retains ordinary termination's cancellation and node-state cleanup.
+	//
+	// +k8s:optional
+	PreserveSnapshots bool `protobuf:"varint,8,opt,name=preserve_snapshots,json=preserveSnapshots,proto3" json:"preserve_snapshots,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *TerminateRequest) Reset() {
@@ -2007,6 +2013,13 @@ func (x *TerminateRequest) GetSpec() *WorkloadSpec {
 		return x.Spec
 	}
 	return nil
+}
+
+func (x *TerminateRequest) GetPreserveSnapshots() bool {
+	if x != nil {
+		return x.PreserveSnapshots
+	}
+	return false
 }
 
 type TerminateResponse struct {
@@ -4554,7 +4567,7 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\x1bcertificate_signing_request\x18\x04 \x01(\fR\x19certificateSigningRequest\x12#\n" +
 	"\ractivation_id\x18\x05 \x01(\tR\factivationId\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
-	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xa2\x02\n" +
+	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xd1\x02\n" +
 	"\x10TerminateRequest\x12$\n" +
 	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -4563,7 +4576,8 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\tactor_uid\x18\x04 \x01(\tR\bactorUid\x126\n" +
 	"\x17actor_template_atespace\x18\x05 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
-	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\"\x13\n" +
+	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12-\n" +
+	"\x12preserve_snapshots\x18\b \x01(\bR\x11preserveSnapshots\"\x13\n" +
 	"\x11TerminateResponse\"\x99\x04\n" +
 	"\n" +
 	"RunRequest\x12$\n" +

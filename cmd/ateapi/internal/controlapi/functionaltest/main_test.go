@@ -145,9 +145,10 @@ type FakeAteletServer struct {
 	DetachRequest *ateletpb.DetachActorRequest
 	FailDetach    error
 
-	TerminateCalled  bool
-	TerminateRequest *ateletpb.TerminateRequest
-	FailTerminate    error
+	TerminateCalled   bool
+	PreserveSnapshots bool
+	TerminateRequest  *ateletpb.TerminateRequest
+	FailTerminate     error
 
 	// objectStore, when set, receives the objects a checkpoint or an upload
 	// writes, so the control plane's copy and release steps have real external
@@ -323,6 +324,7 @@ func (f *FakeAteletServer) Terminate(ctx context.Context, req *ateletpb.Terminat
 	defer f.Lock.Unlock()
 
 	f.TerminateCalled = true
+	f.PreserveSnapshots = req.GetPreserveSnapshots()
 	f.TerminateRequest = proto.Clone(req).(*ateletpb.TerminateRequest)
 	if f.FailTerminate != nil {
 		return nil, f.FailTerminate
