@@ -16,6 +16,8 @@ package controlapi
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -77,6 +79,60 @@ func TestEnsureWorkerAssigned_HeldAfterRead(t *testing.T) {
 	}
 	if len(assignments.Items) != 0 {
 		t.Errorf("worker keeps claims %v for a held actor, want none", assignments.Items)
+	}
+}
+
+func TestResumeActor_HeldRestoreConditions(t *testing.T) {
+	for _, requestID := range []string{"", "resume-1"} {
+		for _, condition := range []string{"unconditional", "matching", "stale UID", "stale activation"} {
+			t.Run(condition+"/request="+requestID, func(t *testing.T) {
+				ctx := context.Background()
+				st := newTestPersistence(t)
+				w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+				ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+				seedWorkflowActor(t, ctx, st, ref, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_RESUMING, func(a *ateapi.Actor) {
+					a.Status.WorkerAssignment = wireTestAssignment()
+					a.Status.AssignedNode = "node-1"
+					a.Status.ActivationId = "01JDQ5W2R3V6Z8B4N7K9M1P0XA"
+				})
+				placeTestHold(t, ctx, st, ref)
+				held := mustReadActor(t, ctx, st, ref)
+				cond := lifecycleConditions{requestID: requestID}
+				if condition != "unconditional" {
+					cond.expectedUID = held.GetMetadata().GetUid()
+					cond.expectedActivation = held.GetStatus().GetActivationId()
+				}
+				var wantTerminations int32 = 1
+				switch condition {
+				case "stale UID":
+					cond.expectedUID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+					wantTerminations = 0
+				case "stale activation":
+					cond.expectedActivation = "01JDQ5W2R3V6Z8B4N7K9M1P0XB"
+					wantTerminations = 0
+				}
+				var terminations atomic.Int32
+				w.dialer = newNodeAteletDialer(t, &capturingAtelet{onTerminate: func() { terminations.Add(1) }})
+				_, _, receipt, err := w.ResumeActor(ctx, ref, cond)
+				if apierror.Code(err) != codes.FailedPrecondition {
+					t.Fatalf("ResumeActor: %v, want FailedPrecondition", err)
+				}
+				if got := terminations.Load(); got != wantTerminations {
+					t.Errorf("Terminate calls = %d, want %d", got, wantTerminations)
+				}
+				if diff := cmp.Diff(held, mustReadActor(t, ctx, st, ref), protocmp.Transform()); diff != "" {
+					t.Errorf("refused resume changed the actor (-before +after):\n%s", diff)
+				}
+				if receipt != nil {
+					t.Errorf("refused resume returned receipt: %v", receipt)
+				}
+				if requestID != "" {
+					if _, err := st.GetActorLifecycleReceipt(ctx, ref, requestID); !errors.Is(err, store.ErrNotFound) {
+						t.Errorf("GetActorLifecycleReceipt: %v, want NotFound", err)
+					}
+				}
+			})
+		}
 	}
 }
 

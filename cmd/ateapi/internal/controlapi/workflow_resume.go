@@ -130,17 +130,17 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	if err != nil {
 		return nil, false, nil, err
 	}
+	if !call.continues {
+		if err := cond.check(actorRef, actor); err != nil {
+			return nil, false, nil, err
+		}
+	}
 	if err := checkNotHeld(actorRef, actor); err != nil {
 		logResumeRefusedByQuarantine(ctx, actor)
 		if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RESUMING {
 			w.terminateHeldRestore(leaseCtx, actorRef, actor, actorTemplate)
 		}
 		return nil, false, nil, err
-	}
-	if !call.continues {
-		if err := cond.check(actorRef, actor); err != nil {
-			return nil, false, nil, err
-		}
 	}
 	if wasRunning = actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING; wasRunning {
 		if call.receipt == nil {
