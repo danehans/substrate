@@ -206,6 +206,44 @@ fi
 notes="$(cat <<NOTES
 **Experimental, unqualified, and development only.** \`${FORK_REPOSITORY}\` is a downstream of \`${BASE_REPOSITORY}\` \`${BASE_TAG}\`. It is not an upstream release, and no protection or qualification is claimed for it.
 
+## Accepted development-use limitations
+
+The [maintainer disposition](https://github.com/danehans/substrate/pull/19#issuecomment-6836736335)
+accepts these four limitations only for the v1.0.1 downstream release reviewed
+in PR #19, for experimental, unqualified, isolated development use:
+
+- Envoy may retain idle origin sockets after tunnel revocation. The
+  [candidate probe](https://github.com/danehans/substrate/pull/18#issuecomment-6834147911)
+  retained sockets beyond eight seconds; tested reuse attempts failed without
+  another origin request. This does not prove universal prevention of reuse.
+- Delayed lifecycle messages without activation fencing may affect a later
+  activation. Worker notifications and Checkpoint/Terminate lack activation
+  identity. See the
+  [lifecycle limits](https://github.com/danehans/substrate/pull/17#issuecomment-6831746653).
+- Some termination outcomes may remain unknown. Actor/worker release can
+  precede the final receipt write; an interrupted fallback can return ABORTED
+  with an unknown outcome. See the same lifecycle and receipt evidence.
+- Control-plane outages may cause tunnel loss, and revocation timing is not
+  qualified. Continuing authorization fails closed; the eight-second target
+  is not a deployment-wide guarantee. See the
+  [gateway evidence](https://github.com/danehans/agentgateway/pull/7#issuecomment-6831600628)
+  and [acceptance matrix](https://github.com/danehans/substrate/pull/19#issuecomment-6836171631).
+
+Require homogeneous patched writers, exclude mixed-version rollout/rollback,
+and retain default per-execution pooling. These known limitations need not be
+fixed before this development release. Acceptance does not carry forward to
+other releases or materially broader behavior.
+
+It does not waive regressions from the frozen downstream baseline or failures
+of the agreed certificate, identity, native-policy, quarantine or revocation
+checks. Unknown termination outcomes must not be reported as confirmed success.
+Tunnel closure is not proof of idle-origin socket retirement or cancellation
+of upstream work. Required artifact provenance, digest/platform checks,
+independent review and G's validation remain mandatory. G must distinguish
+expected limitations from unexpected failures; any materially broader behavior
+or newly discovered limitation requires a separate disposition. H remains
+responsible for runtime publication after the remaining gates pass.
+
 ## Source
 
 | | Repository | Revision |

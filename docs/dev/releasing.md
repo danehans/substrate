@@ -148,9 +148,8 @@ lists every change with its upstream proposal and replacement condition.
 After the first release that adds a package, make it public in its package
 settings, as for any GitHub package.
 
-The currently pinned downstream gateway predates the reviewed v1.0.1
-actor-state alignment. It must be replaced before release; the exact source
-and artifact distinction is recorded in
-[Gateway integration](../../hack/release/danehans/PATCHES.md#gateway-integration).
-Chart rendering and metadata checks alone do not validate that protocol
-compatibility or qualify the runtime.
+The pinned downstream gateway uses the v1.0.1 actor-state values. Keep its
+source and image index consistent when updating the
+[gateway integration](../../hack/release/danehans/PATCHES.md#gateway-integration).
+Verify both platform manifests and source provenance before runtime publication.
+Chart rendering and metadata checks alone do not qualify the runtime.
