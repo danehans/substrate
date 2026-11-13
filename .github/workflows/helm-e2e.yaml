@@ -84,6 +84,9 @@ jobs:
         done
     - name: Install Agent Substrate with kubectl ate
       run: .github/scripts/helm-e2e/install.sh
+    - name: Verify published gateway revision and native platform
+      if: github.repository == 'danehans/substrate'
+      run: .github/scripts/helm-e2e/check-gateway.sh
     - name: Enable NFS
       run: |
         sudo modprobe nfs || true
